@@ -24,22 +24,25 @@ jobs:
 
       # CODE_SIGNING_ALLOWED=NO:runner 没有签名证书,出未签名产物,
       # 本地用 `codesign --force --deep -s -` 临时签名即可运行。
-      - name: Resolve packages
-        run: |
-          xcodebuild \
-            -project Ice.xcodeproj \
-            -scheme Ice \
-            -resolvePackages
-
+      # SPM 依赖解析由 build 自动完成,日志全程落盘便于失败时排查。
       - name: Build (Release)
         run: |
+          set -o pipefail
           xcodebuild \
             -project Ice.xcodeproj \
             -scheme Ice \
             -configuration Release \
             -derivedDataPath build/dd \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build 2>&1 | tee build.log
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7
 
       - name: Package
         run: |
