@@ -11,6 +11,12 @@ on:
 permissions:
   contents: write
 
+# 防止并发构建互相覆盖 nightly release:同一时间只允许一个构建任务,
+# 排队执行,保证 release 上永远是最新 commit 的产物。
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Release Build (unsigned)
