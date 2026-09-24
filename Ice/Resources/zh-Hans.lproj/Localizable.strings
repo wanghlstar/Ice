@@ -1,0 +1,172 @@
+/*
+  Localizable.strings (zh-Hans)
+  Ice — 简体中文
+
+  SwiftUI 的 Text/Toggle/Button 等字面值即 key。
+  基于 jordanbaird/Ice 上游源码提取 + tzyyung 繁体底座转换。
+*/
+
+/* 設定分頁 */
+"General" = "一般";
+"Menu Bar Layout" = "菜单栏排列";
+"Menu Bar Appearance" = "菜单栏外观";
+"Hotkeys" = "快速键";
+"Advanced" = "进阶";
+"About" = "关于";
+/* 一般設定 */
+"Show Ice icon" = "显示 Ice 图标";
+"Ice icon" = "Ice 图标";
+"Apply system theme to icon" = "图标应用系统外观";
+"Display the icon as a monochrome image matching the system appearance" = "以符合系统外观的单色图标显示";
+"Choose a custom icon to show in the menu bar" = "选择显示于菜单栏的自订图标";
+"Choose image…" = "选择图片…";
+"Use Ice Bar" = "使用 Ice Bar";
+"Enable the Ice Bar" = "启用 Ice Bar";
+"Show hidden menu bar items in a separate bar below the menu bar" = "在菜单栏下方的独立列中显示隐藏的菜单栏项目";
+"Location" = "位置";
+"Dynamic" = "动态";
+"Mouse pointer" = "鼠标光标";
+"The Ice Bar's location changes based on context" = "Ice Bar 的位置依场景变化";
+"The Ice Bar is centered below the mouse pointer" = "Ice Bar 居中显示于鼠标光标下方";
+"The Ice Bar is centered below the Ice icon" = "Ice Bar 居中显示于 Ice 图标下方";
+"Show on click" = "点击时显示";
+"Show on hover" = "光标悬停时显示";
+"Show on hover delay" = "悬停显示延迟";
+"The amount of time to wait before showing on hover" = "悬停显示前等待的时间";
+"Show on scroll" = "滚动时显示";
+"Hover over an empty area of the menu bar to show hidden menu bar items" = "光标悬停于菜单栏空白处以显示隐藏的菜单栏项目";
+"Scroll or swipe in the menu bar to toggle hidden menu bar items" = "在菜单栏上滚动或滑动以切换隐藏的菜单栏项目";
+"Automatically rehide" = "自动重新隐藏";
+"Strategy" = "策略";
+"Smart" = "智能";
+"Timed" = "定时";
+"Focused app" = "聚焦的应用";
+"Menu bar items are rehidden using a smart algorithm" = "以智能算法重新隐藏菜单栏项目";
+"Menu bar items are rehidden after a fixed amount of time" = "经过固定时间后重新隐藏菜单栏项目";
+"Menu bar items are rehidden when the focused app changes" = "切换聚焦的应用时重新隐藏菜单栏项目";
+"Temporarily shown item delay" = "暂时显示项目的延迟";
+/* 進階設定 */
+"Menu Bar Sections" = "菜单栏区域";
+"Enable always-hidden section" = "启用始终隐藏区域";
+"Always-hidden section can be shown" = "始终隐藏区域可显示";
+"Option + click one of Ice's menu bar items to show the section" = "Option＋点击 Ice 的菜单栏图标以显示此区域";
+"Option + click one of Ice's menu bar items, or inside an empty area of the menu bar to show the section" = "Option＋点击 Ice 的菜单栏图标或菜单栏空白处以显示此区域";
+"Menu Bar Items" = "菜单栏项目";
+"Hide application menus when showing menu bar items" = "显示菜单栏项目时隐藏应用菜单";
+"Show section dividers" = "显示区域分隔项";
+"Insert divider items" = "插入分隔项目";
+"between sections" = "于区域之间";
+"Show all sections when Command + dragging menu bar items" = "Command＋拖拽菜单栏项目时显示所有区域";
+"Show context menu on right click" = "右键点击时显示快捷菜单";
+"Menu bar item spacing" = "菜单栏项目间距";
+"Apply the current spacing" = "应用目前间距";
+"Reset to the default spacing" = "重置为默认间距";
+"Apply" = "应用";
+"Reset" = "重置";
+"Note: You may need to log out and back in for this setting to apply properly." = "注意：此设置可能需要登出再登录才会完整生效。";
+/* 選單列外觀 */
+"Use dynamic appearance" = "使用动态外观";
+"Light Appearance" = "浅色外观";
+"Dark Appearance" = "深色外观";
+"Tint" = "色调";
+"Solid" = "纯色";
+"Gradient" = "渐变";
+"Shadow" = "阴影";
+"Border" = "边框";
+"Border Color" = "边框颜色";
+"Shape Kind" = "形状类型";
+"No shape kind selected" = "未选择形状类型";
+"Full" = "完整";
+"Split" = "分段";
+"Leading End Cap" = "前端端点";
+"Trailing End Cap" = "后端端点";
+"Menu Bar Shape" = "菜单栏形状";
+"None" = "无";
+"Ice cannot edit the appearance of automatically hidden menu bars" = "菜单栏设为自动隐藏时，Ice 无法编辑其外观";
+/* 排列 */
+"Drag to arrange your menu bar items" = "拖拽以排列菜单栏项目";
+"Tip: you can also arrange menu bar items by Command + dragging them in the menu bar" = "提示：也可以在菜单栏上 Command＋拖拽来排列菜单栏项目";
+"Menu bar layout requires screen recording permissions" = "菜单栏排列需要屏幕录制权限";
+"Ice cannot arrange menu bar items in automatically hidden menu bars" = "菜单栏设为自动隐藏时，Ice 无法排列菜单栏项目";
+/* 快速鍵 */
+"Toggle the hidden section" = "切换隐藏区域";
+"Toggle the always-hidden section" = "切换始终隐藏区域";
+"Toggle application menus" = "切换应用菜单";
+"Search menu bar items" = "搜索菜单栏项目";
+"Record Hotkey" = "录制快速键";
+"Type Hotkey" = "输入快速键";
+"ERROR" = "错误";
+/* 關於 */
+"Acknowledgements" = "致谢";
+"Contribute" = "参与贡献";
+"Report a Bug" = "反馈问题";
+"Support Ice" = "支持 Ice";
+"Quit Ice" = "退出 Ice";
+"Quit" = "结束";
+/* 權限視窗 */
+"Permissions" = "权限";
+"Ice needs permission to manage the menu bar." = "Ice 需要权限才能管理菜单栏。";
+"Absolutely no personal information is collected or stored." = "绝对不会收集或存储任何个人信息。";
+"Ice needs this to:" = "Ice 需要此权限以便：";
+"Grant Permission" = "授予权限";
+"Permission Granted" = "已授予权限";
+"Ice can work in a limited mode without this permission." = "没有此权限时，Ice 仍可以有限模式运作。";
+"Open Ice Settings" = "打开 Ice 设置";
+"Go to Advanced Settings" = "前往进阶设置";
+/* Ice Bar / 搜尋 */
+"The Ice Bar requires screen recording permissions." = "Ice Bar 需要屏幕录制权限。";
+"Ice cannot display menu bar items for automatically hidden menu bars" = "菜单栏设为自动隐藏时，Ice 无法显示菜单栏项目";
+"Unable to display menu bar items" = "无法显示菜单栏项目";
+"Search menu bar items…" = "搜索菜单栏项目…";
+"Hold to Preview" = "按住以预览";
+"You can still access Ice's settings by right-clicking an empty area in the menu bar" = "你仍可右键点击菜单栏空白处来打开 Ice 的设置";
+/* 右鍵快捷選單 */
+"Ice Settings…" = "Ice 设置…";
+"Search Menu Bar Items" = "搜索菜单栏项目";
+/* 通用 */
+"Done" = "完成";
+"OK" = "好";
+"Other" = "其他";
+"(" = "（";
+")" = "）";
+"1" = "1";
+"2" = "2";
+"3" = "3";
+"•" = "•";
+"BETA" = "BETA";
+"Ice" = "Ice";
+"AudioVideoModule" = "AudioVideoModule";
+"BentoBox" = "BentoBox";
+"NewItems" = "NewItems";
+"Automatically check for updates" = "自动检查更新";
+"Automatically download updates" = "自动下载更新";
+"Check for Updates" = "检查更新";
+"Last checked: \(lastUpdateCheckString)" = "上次检查：\(lastUpdateCheckString)";
+"Round Cap" = "圆角";
+"Square Cap" = "方角";
+"Tip: you can also edit these settings by right-clicking in an empty area of the menu bar" = "提示：你也可以在菜单栏空白处右键编辑这些设置";
+"Use inset shape on screens with notch" = "在有刘海屏的屏幕上使用内嵌形状";
+"Version \(Constants.versionString)" = "版本 \(Constants.versionString)";
+"\(section.name.displayString) Section" = "\(section.name.displayString) 区域";
+"default" = "默认";
+"max" = "最大";
+"none" = "无";
+"Edit Menu Bar Appearance…" = "编辑菜单栏外观…";
+"Check for Updates…" = "检查更新…";
+"The amount of time to wait before hiding temporarily shown menu bar items" = "暂时显示的菜单栏项目重新隐藏前的等待时间";
+" second" = " 秒";
+" seconds" = " 秒";
+"A new update is available" = "有新更新可用";
+"Accessibility" = "辅助功能";
+"Screen Recording" = "屏幕录制";
+"Apply different settings based on the current system appearance" = "根据当前系统外观应用不同设置";
+"Applying this setting will relaunch all apps with menu bar items. Some apps may need to be manually relaunched." = "应用此设置将重新启动所有带有菜单栏项目的应用，某些应用可能需要手动重新启动。";
+"Border Width" = "边框宽度";
+"Click inside an empty area of the menu bar to show hidden menu bar items" = "点击菜单栏空白处显示隐藏的菜单栏项目";
+"Continue" = "继续";
+"Continue in Limited Mode" = "以受限模式继续";
+"Make more room in the menu bar by hiding the left application menus if needed" = "需要时隐藏左侧的应用菜单，为菜单栏腾出更多空间";
+"Clock" = "时钟";
+"MusicRecognition" = "音乐识别";
+"Siri" = "Siri";
+"FaceTime" = "FaceTime";
