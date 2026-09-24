@@ -346,6 +346,16 @@ final class MenuBarManager: ObservableObject {
         )
         menu.addItem(settingsItem)
 
+        menu.addItem(.separator())
+
+        let quitItem = NSMenuItem(
+            title: NSLocalizedString("Quit Ice", comment: ""),
+            action: #selector(NSApp.terminate),
+            keyEquivalent: "q"
+        )
+        quitItem.keyEquivalentModifierMask = .command
+        menu.addItem(quitItem)
+
         menu.popUp(positioning: nil, at: point, in: nil)
     }
 
