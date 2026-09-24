@@ -151,7 +151,7 @@
 "default" = "默认";
 "max" = "最大";
 "none" = "无";
-"Edit Menu Bar Appearance…" = "编辑菜单栏外观…";
+"Edit Menu Bar Appearance…" = "菜单栏外观";
 "Check for Updates…" = "检查更新…";
 "The amount of time to wait before hiding temporarily shown menu bar items" = "暂时显示的菜单栏项目重新隐藏前的等待时间";
 " second" = " 秒";
