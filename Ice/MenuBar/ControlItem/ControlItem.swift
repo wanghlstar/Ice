@@ -425,7 +425,7 @@ final class ControlItem {
         let menu = NSMenu(title: "Ice")
 
         let settingsItem = NSMenuItem(
-            title: "Ice Settings…",
+            title: NSLocalizedString("Ice Settings…", comment: ""),
             action: #selector(AppDelegate.openSettingsWindow),
             keyEquivalent: ","
         )
@@ -435,7 +435,7 @@ final class ControlItem {
         menu.addItem(.separator())
 
         let searchItem = NSMenuItem(
-            title: "Search Menu Bar Items",
+            title: NSLocalizedString("Search Menu Bar Items", comment: ""),
             action: #selector(showSearchPanel),
             keyEquivalent: ""
         )
@@ -462,7 +462,13 @@ final class ControlItem {
                 continue
             }
             let item = NSMenuItem(
-                title: "\(section.isHidden ? "Show" : "Hide") the \(name.displayString) Section",
+                title: String(
+                    format: NSLocalizedString("%1$@ the %2$@ Section", comment: "Menu bar section toggle item"),
+                    section.isHidden
+                        ? NSLocalizedString("Show", comment: "Menu bar section toggle item")
+                        : NSLocalizedString("Hide", comment: "Menu bar section toggle item"),
+                    NSLocalizedString(name.displayString, comment: "Menu bar section name")
+                ),
                 action: #selector(toggleMenuBarSection),
                 keyEquivalent: ""
             )
@@ -494,7 +500,7 @@ final class ControlItem {
         menu.addItem(.separator())
 
         let checkForUpdatesItem = NSMenuItem(
-            title: "Check for Updates…",
+            title: NSLocalizedString("Check for Updates…", comment: ""),
             action: #selector(checkForUpdates),
             keyEquivalent: ""
         )
@@ -504,7 +510,7 @@ final class ControlItem {
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
-            title: "Quit Ice",
+            title: NSLocalizedString("Quit Ice", comment: ""),
             action: #selector(NSApp.terminate),
             keyEquivalent: "q"
         )

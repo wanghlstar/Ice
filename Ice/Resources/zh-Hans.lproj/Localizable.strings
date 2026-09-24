@@ -170,3 +170,14 @@
 "MusicRecognition" = "音乐识别";
 "Siri" = "Siri";
 "FaceTime" = "FaceTime";
+
+/* NSLocalizedString 补丁(汉化第二轮) */
+"Launch at login" = "登录时启动";
+"Show" = "显示";
+"Hide" = "隐藏";
+"%1$@ the %2$@ Section" = "%1$@ %2$@ 区域";
+"Version %@ is now available" = "版本 %@ 现已可用";
+"Get real-time information about the menu bar." = "实时获取菜单栏信息";
+"Arrange menu bar items." = "排列菜单栏项目";
+"Edit the menu bar's appearance." = "编辑菜单栏外观";
+"Display images of individual menu bar items." = "显示各个菜单栏项目的图像";

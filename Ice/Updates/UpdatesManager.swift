@@ -127,8 +127,11 @@ extension UpdatesManager: @preconcurrency SPUStandardUserDriverDelegate {
         if !state.userInitiated {
             appState.userNotificationManager.addRequest(
                 with: .updateCheck,
-                title: "A new update is available",
-                body: "Version \(update.displayVersionString) is now available"
+                title: NSLocalizedString("A new update is available", comment: ""),
+                body: String(
+                    format: NSLocalizedString("Version %@ is now available", comment: ""),
+                    update.displayVersionString
+                )
             )
         }
     }
