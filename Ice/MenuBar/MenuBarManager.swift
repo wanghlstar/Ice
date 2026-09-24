@@ -339,10 +339,11 @@ final class MenuBarManager: ObservableObject {
 
         menu.addItem(.separator())
 
+        // 该菜单不显示快捷键列,收窄整体宽度(最长项「菜单栏外观」+ 少量内边距)
         let settingsItem = NSMenuItem(
             title: NSLocalizedString("Ice Settings…", comment: ""),
             action: #selector(AppDelegate.openSettingsWindow),
-            keyEquivalent: ","
+            keyEquivalent: ""
         )
         menu.addItem(settingsItem)
 
@@ -351,9 +352,8 @@ final class MenuBarManager: ObservableObject {
         let quitItem = NSMenuItem(
             title: NSLocalizedString("Quit Ice", comment: ""),
             action: #selector(NSApp.terminate),
-            keyEquivalent: "q"
+            keyEquivalent: ""
         )
-        quitItem.keyEquivalentModifierMask = .command
         menu.addItem(quitItem)
 
         menu.popUp(positioning: nil, at: point, in: nil)
