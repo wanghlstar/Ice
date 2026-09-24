@@ -499,16 +499,6 @@ final class ControlItem {
 
         menu.addItem(.separator())
 
-        let checkForUpdatesItem = NSMenuItem(
-            title: NSLocalizedString("Check for Updates…", comment: ""),
-            action: #selector(checkForUpdates),
-            keyEquivalent: ""
-        )
-        checkForUpdatesItem.target = self
-        menu.addItem(checkForUpdatesItem)
-
-        menu.addItem(.separator())
-
         let quitItem = NSMenuItem(
             title: NSLocalizedString("Quit Ice", comment: ""),
             action: #selector(NSApp.terminate),
