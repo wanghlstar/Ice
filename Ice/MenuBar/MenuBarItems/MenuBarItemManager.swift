@@ -67,13 +67,34 @@ final class MenuBarItemManager: ObservableObject {
         }
     }
 
+    /// An anchor describing where to return a temporarily shown item.
+    private struct ReturnAnchor {
+        /// The side of the target item to place the shown item on.
+        enum Side {
+            case left
+            case right
+        }
+
+        /// The window identifier of the target item at the time the anchor was created.
+        let targetWindowID: CGWindowID
+
+        /// The information of the target item at the time the anchor was created.
+        let targetInfo: MenuBarItemInfo
+
+        /// The side of the target item to place the shown item on.
+        let side: Side
+    }
+
     /// Context for a temporarily shown menu bar item.
     private struct TempShownItemContext {
+        /// The window identifier of the item at the time it was shown.
+        let windowID: CGWindowID
+
         /// The information associated with the item.
         let info: MenuBarItemInfo
 
-        /// The destination to return the item to.
-        let returnDestination: MoveDestination
+        /// The anchor to resolve into a destination when rehiding the item.
+        let returnAnchor: ReturnAnchor
 
         /// The window of the item's shown interface.
         let shownInterfaceWindow: WindowInfo?
@@ -199,6 +220,24 @@ final class MenuBarItemManager: ObservableObject {
             .store(in: &c)
 
         Publishers.Merge(
+            NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification),
+            NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] _ in
+            guard let self else {
+                return
+            }
+            Task {
+                // Give the system a moment to settle the new menu bar layout.
+                try? await Task.sleep(for: .milliseconds(500))
+                self.cachedItemWindowIDs.removeAll()
+                await self.cacheItemsIfNeeded()
+            }
+        }
+        .store(in: &c)
+
+        Publishers.Merge(
             UniversalEventMonitor.publisher(for: mouseTrackingMask),
             RunLoopLocalEventMonitor.publisher(for: mouseTrackingMask, mode: .eventTracking)
         )
@@ -242,7 +281,8 @@ extension MenuBarItemManager {
     private func uncheckedCacheItems(
         hiddenControlItem: MenuBarItem,
         alwaysHiddenControlItem: MenuBarItem?,
-        otherItems: [MenuBarItem]
+        otherItems: [MenuBarItem],
+        allItems: [MenuBarItem]
     ) {
         Logger.itemManager.debug("Caching menu bar items")
 
@@ -252,15 +292,17 @@ extension MenuBarItemManager {
         )
 
         var cache = ItemCache()
-        var tempShownItems = [(MenuBarItem, MoveDestination)]()
+        var tempShownItems = [(MenuBarItem, ReturnAnchor)]()
 
         for item in otherItems {
-            if let context = tempShownItemContexts.first(where: { $0.info == item.info }) {
-                // Keep track of temporarily shown items and their return destinations separately.
+            if let context = tempShownItemContexts.first(where: { $0.windowID == item.windowID })
+                ?? tempShownItemContexts.first(where: { $0.info == item.info })
+            {
+                // Keep track of temporarily shown items and their return anchors separately.
                 // We want to cache them as if they were in their original locations. Once all other
-                // items are cached, use the return destinations to insert the items into the cache
+                // items are cached, use the return anchors to insert the items into the cache
                 // at the correct position.
-                tempShownItems.append((item, context.returnDestination))
+                tempShownItems.append((item, context.returnAnchor))
             } else if predicates.isInVisibleSection(item) {
                 cache[.visible].append(item)
             } else if predicates.isInHiddenSection(item) {
@@ -272,7 +314,14 @@ extension MenuBarItemManager {
             }
         }
 
-        for (item, destination) in tempShownItems {
+        for (item, anchor) in tempShownItems {
+            let destination = resolveDestination(from: anchor, in: allItems)
+                ?? fallbackDestination(in: allItems)
+
+            guard let destination else {
+                logNotCachedWarning(for: item)
+                continue
+            }
             switch destination {
             case .leftOfItem(let targetItem):
                 switch targetItem.info {
@@ -334,6 +383,7 @@ extension MenuBarItemManager {
         }
 
         var items = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
+        let allItems = items
 
         let hiddenControlItem = items.firstIndex(matching: .hiddenControlItem).map { items.remove(at: $0) }
         let alwaysHiddenControlItem = items.firstIndex(matching: .alwaysHiddenControlItem).map { items.remove(at: $0) }
@@ -355,7 +405,8 @@ extension MenuBarItemManager {
             uncheckedCacheItems(
                 hiddenControlItem: hiddenControlItem,
                 alwaysHiddenControlItem: alwaysHiddenControlItem,
-                otherItems: items
+                otherItems: items,
+                allItems: allItems
             )
         } catch {
             Logger.itemManager.error("Error enforcing control item order: \(error)")
@@ -1256,17 +1307,44 @@ extension MenuBarItemManager {
 // MARK: - Temporarily Show Items
 
 extension MenuBarItemManager {
-    /// Gets the destination to return the given item to after it is temporarily shown.
-    private func getReturnDestination(for item: MenuBarItem, in items: [MenuBarItem]) -> MoveDestination? {
+    /// Gets the anchor to return the given item to after it is temporarily shown.
+    private func getReturnAnchor(for item: MenuBarItem, in items: [MenuBarItem]) -> ReturnAnchor? {
         let info = item.info
         if let index = items.firstIndex(where: { $0.info == info }) {
             if items.indices.contains(index + 1) {
-                return .leftOfItem(items[index + 1])
+                let target = items[index + 1]
+                return ReturnAnchor(targetWindowID: target.windowID, targetInfo: target.info, side: .left)
             } else if items.indices.contains(index - 1) {
-                return .rightOfItem(items[index - 1])
+                let target = items[index - 1]
+                return ReturnAnchor(targetWindowID: target.windowID, targetInfo: target.info, side: .right)
             }
         }
         return nil
+    }
+
+    /// Resolves an anchor into a destination using the current menu bar items.
+    ///
+    /// Matches the anchor's target by window identifier first, then by item
+    /// information, so that a renamed or recreated item doesn't break the move.
+    private func resolveDestination(from anchor: ReturnAnchor, in items: [MenuBarItem]) -> MoveDestination? {
+        let target = items.first(where: { $0.windowID == anchor.targetWindowID })
+            ?? items.first(where: { $0.info == anchor.targetInfo })
+        guard let target else {
+            return nil
+        }
+        return switch anchor.side {
+        case .left: .leftOfItem(target)
+        case .right: .rightOfItem(target)
+        }
+    }
+
+    /// Returns a destination that hides the item to the left of the hidden
+    /// control item, used when its original anchor can no longer be resolved.
+    private func fallbackDestination(in items: [MenuBarItem]) -> MoveDestination? {
+        guard let hiddenControlItem = items.first(where: { $0.info == .hiddenControlItem }) else {
+            return nil
+        }
+        return .leftOfItem(hiddenControlItem)
     }
 
     /// Schedules a timer for the given interval, attempting to rehide the current
@@ -1327,8 +1405,8 @@ extension MenuBarItemManager {
 
         var items = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
 
-        guard let destination = getReturnDestination(for: item, in: items) else {
-            Logger.itemManager.warning("No return destination for \(item.logString)")
+        guard let returnAnchor = getReturnAnchor(for: item, in: items) else {
+            Logger.itemManager.warning("No return anchor for \(item.logString)")
             return
         }
 
@@ -1385,8 +1463,9 @@ extension MenuBarItemManager {
             }
 
             let context = TempShownItemContext(
+                windowID: item.windowID,
                 info: item.info,
-                returnDestination: destination,
+                returnAnchor: returnAnchor,
                 shownInterfaceWindow: shownInterfaceWindow
             )
             tempShownItemContexts.append(context)
@@ -1432,11 +1511,24 @@ extension MenuBarItemManager {
         }
 
         while let context = tempShownItemContexts.popLast() {
-            guard let item = items.first(where: { $0.info == context.info }) else {
+            guard let item = items.first(where: { $0.windowID == context.windowID })
+                ?? items.first(where: { $0.info == context.info })
+            else {
+                Logger.itemManager.warning("Could not find temporarily shown item \(context.info) to rehide")
                 continue
             }
+
+            let destination = resolveDestination(from: context.returnAnchor, in: items)
+                ?? fallbackDestination(in: items)
+
+            guard let destination else {
+                Logger.itemManager.warning("No destination available to rehide \(item.logString)")
+                failedContexts.append(context)
+                continue
+            }
+
             do {
-                try await move(item: item, to: context.returnDestination)
+                try await move(item: item, to: destination)
             } catch {
                 Logger.itemManager.error("Failed to rehide \(item.logString) (error: \(error))")
                 failedContexts.append(context)
