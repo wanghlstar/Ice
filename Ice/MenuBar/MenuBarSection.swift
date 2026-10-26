@@ -9,7 +9,7 @@ import Cocoa
 @MainActor
 final class MenuBarSection {
     /// The name of a menu bar section.
-    enum Name: CaseIterable {
+    enum Name: String, CaseIterable, Codable {
         case visible
         case hidden
         case alwaysHidden
@@ -30,6 +30,12 @@ final class MenuBarSection {
             case .hidden: "hidden section"
             case .alwaysHidden: "always-hidden section"
             }
+        }
+
+        /// The section names, ordered by their position in the menu bar,
+        /// from left to right.
+        static var menuBarOrder: [Name] {
+            [.alwaysHidden, .hidden, .visible]
         }
     }
 

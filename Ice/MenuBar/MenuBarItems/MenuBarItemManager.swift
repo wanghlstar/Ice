@@ -60,6 +60,15 @@ final class MenuBarItemManager: ObservableObject {
             return nil
         }
 
+        /// Returns the name of the section for the menu bar item with the
+        /// given window identifier.
+        func section(forWindowID windowID: CGWindowID) -> MenuBarSection.Name? {
+            for (section, items) in self.items where items.contains(where: { $0.windowID == windowID }) {
+                return section
+            }
+            return nil
+        }
+
         /// Accesses the items in the given section.
         subscript(section: MenuBarSection.Name) -> [MenuBarItem] {
             get { items[section, default: []] }
@@ -124,14 +133,33 @@ final class MenuBarItemManager: ObservableObject {
     /// Storage for internal observers.
     private var cancellables = Set<AnyCancellable>()
 
-    /// Cached window identifiers for the most recent items.
-    private var cachedItemWindowIDs = [CGWindowID]()
+    /// Cached signature for the most recent menu bar items.
+    ///
+    /// The signature includes the frame of each item, so that the cache is
+    /// updated when items are rearranged, even if the set of item windows
+    /// stays the same.
+    private var cachedItemSignature: ItemSignature?
+
+    /// The saved layout of the menu bar items.
+    private var savedItemLayout: MenuBarItemLayout
+
+    /// A Boolean value that indicates whether a saved layout is available.
+    private var hasSavedItemLayout: Bool
 
     /// Context values for the current temporarily shown items.
     private var tempShownItemContexts = [TempShownItemContext]()
 
     /// A timer that determines when to rehide the temporarily shown items.
     private var tempShownItemsTimer: Timer?
+
+    /// The last time an item was rescued for each item info.
+    private var lastRescueDates = [MenuBarItemInfo: Date]()
+
+    /// The number of failed rescue attempts for each item info.
+    private var rescueAttemptCounts = [MenuBarItemInfo: Int]()
+
+    /// A Boolean value that indicates whether items are currently being rescued.
+    private var isRescuingItems = false
 
     /// The last time a menu bar item was moved.
     private var lastItemMoveStartDate: Date?
@@ -156,6 +184,17 @@ final class MenuBarItemManager: ObservableObject {
         .rightMouseUp,
         .otherMouseUp,
     ]
+
+    /// The maximum number of items to rescue per cache.
+    private static let maxRescueCount = 3
+
+    /// The maximum number of times to attempt to rescue an item before
+    /// leaving it in the always-hidden section.
+    private static let maxRescueAttempts = 3
+
+    /// The minimum amount of time to wait between rescue attempts for the
+    /// same item.
+    private static let rescueCooldown: TimeInterval = 15
 
     /// A Boolean value that indicates whether a menu bar item, or
     /// group of menu bar items is being moved.
@@ -183,6 +222,9 @@ final class MenuBarItemManager: ObservableObject {
     /// Creates a manager with the given app state.
     init(appState: AppState) {
         self.appState = appState
+        let layout = MenuBarItemLayout.load()
+        self.savedItemLayout = layout ?? MenuBarItemLayout()
+        self.hasSavedItemLayout = layout != nil
     }
 
     /// Sets up the manager.
@@ -231,7 +273,8 @@ final class MenuBarItemManager: ObservableObject {
             Task {
                 // Give the system a moment to settle the new menu bar layout.
                 try? await Task.sleep(for: .milliseconds(500))
-                self.cachedItemWindowIDs.removeAll()
+                // Reset the signature, as the menu bar layout has changed.
+                self.cachedItemSignature = nil
                 await self.cacheItemsIfNeeded()
             }
         }
@@ -375,11 +418,10 @@ extension MenuBarItemManager {
         }
 
         let itemWindowIDs = Bridging.getWindowList(option: [.menuBarItems, .activeSpace])
-        if cachedItemWindowIDs == itemWindowIDs {
-            logSkippingCache(reason: "item windows have not changed")
+        let signature = ItemSignature(windowIDs: itemWindowIDs)
+        if signature == cachedItemSignature {
+            logSkippingCache(reason: "menu bar items have not changed")
             return
-        } else {
-            cachedItemWindowIDs = itemWindowIDs
         }
 
         var items = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
@@ -392,8 +434,13 @@ extension MenuBarItemManager {
             Logger.itemManager.warning("Missing control item for hidden section")
             Logger.itemManager.debug("Clearing menu bar item cache")
             itemCache.clear()
+            // Reset the signature, as the cache could not be updated. Without
+            // this, the cache would stay empty until the menu bar items change.
+            cachedItemSignature = nil
             return
         }
+
+        let previousCache = itemCache
 
         do {
             if let alwaysHiddenControlItem {
@@ -412,6 +459,242 @@ extension MenuBarItemManager {
             Logger.itemManager.error("Error enforcing control item order: \(error)")
             Logger.itemManager.debug("Clearing menu bar item cache")
             itemCache.clear()
+            // Reset the signature, as the cache could not be updated. Without
+            // this, the cache would stay empty until the menu bar items change.
+            cachedItemSignature = nil
+            return
+        }
+
+        let misplacedItems = reconcileSavedItemLayout(
+            previousCache: previousCache,
+            newCache: itemCache
+        )
+
+        cachedItemSignature = signature
+
+        rescueMisplacedItems(misplacedItems, hiddenControlItem: hiddenControlItem)
+    }
+}
+
+// MARK: - Item Signature
+
+extension MenuBarItemManager {
+    /// A signature that describes the current state of the menu bar items.
+    private struct ItemSignature: Equatable {
+        /// The frame of each menu bar item, keyed by window identifier.
+        private var frames: [CGWindowID: CGRect]
+
+        /// Creates a signature for the menu bar items with the given
+        /// window identifiers.
+        ///
+        /// - Parameter windowIDs: The window identifiers of the menu bar items.
+        init(windowIDs: [CGWindowID]) {
+            var frames = [CGWindowID: CGRect]()
+            for windowID in windowIDs {
+                guard let frame = Bridging.getWindowFrame(for: windowID) else {
+                    continue
+                }
+                frames[windowID] = frame
+            }
+            self.frames = frames
+        }
+    }
+}
+
+// MARK: - Saved Layout
+
+extension MenuBarItemManager {
+    /// Updates the saved layout to match the given cache, returning the items
+    /// that the system placed in the always-hidden section.
+    ///
+    /// Items are only considered misplaced if they were not deliberately placed
+    /// in the always-hidden section. Deliberately placed items are recorded in
+    /// the saved layout, and are never returned to another section.
+    ///
+    /// - Parameters:
+    ///   - previousCache: The cache from the previous update.
+    ///   - newCache: The current cache.
+    ///
+    /// - Returns: The items to return to their saved locations.
+    private func reconcileSavedItemLayout(
+        previousCache: ItemCache,
+        newCache: ItemCache
+    ) -> [MenuBarItem] {
+        func isTempShown(_ item: MenuBarItem) -> Bool {
+            tempShownItemContexts.contains { context in
+                context.windowID == item.windowID || context.info == item.info
+            }
+        }
+
+        var locations = [SavedItemLocation]()
+        var misplacedItems = [MenuBarItem]()
+        var savedInfos = Set<MenuBarItemInfo>()
+
+        for section in MenuBarSection.Name.menuBarOrder {
+            for item in newCache[section] {
+                // Items are identified by their info, so only save a single
+                // location for each one. Items that share the same info are
+                // indistinguishable from one another.
+                guard savedInfos.insert(item.info).inserted else {
+                    continue
+                }
+
+                var savedSection = section
+
+                if section == .alwaysHidden {
+                    let saved = savedItemLayout.section(for: item.info)
+                    let previousSection = previousCache.section(forWindowID: item.windowID)
+                    let attempts = rescueAttemptCounts[item.info] ?? 0
+
+                    if saved == .alwaysHidden {
+                        // The item was deliberately placed in the always-hidden section.
+                    } else if let previousSection, previousSection != .alwaysHidden {
+                        // The item was moved into the always-hidden section since the
+                        // last cache, so it was placed there by the user.
+                        savedSection = .alwaysHidden
+                    } else if
+                        !hasSavedItemLayout
+                            || !item.isMovable
+                            || attempts >= Self.maxRescueAttempts
+                    {
+                        // The item cannot be returned to a saved location, so leave
+                        // it in the always-hidden section.
+                    } else {
+                        // The system placed the item in the always-hidden section.
+                        // Record the section that it belongs to, and return it to
+                        // that section when possible.
+                        savedSection = saved ?? .hidden
+                        if !isTempShown(item) {
+                            misplacedItems.append(item)
+                        }
+                    }
+                }
+
+                if section != .alwaysHidden {
+                    rescueAttemptCounts[item.info] = nil
+                    lastRescueDates[item.info] = nil
+                }
+
+                locations.append(SavedItemLocation(info: item.info, section: savedSection))
+            }
+        }
+
+        // Preserve the saved locations of items that are not currently in the
+        // menu bar, so that they can be returned when they reappear.
+        let currentInfos = Set(locations.map(\.info))
+        locations.append(
+            contentsOf: savedItemLayout.locations.filter { location in
+                !currentInfos.contains(location.info)
+            }
+        )
+        if locations.count > MenuBarItemLayout.maximumLocationCount {
+            locations.removeLast(locations.count - MenuBarItemLayout.maximumLocationCount)
+        }
+
+        if locations != savedItemLayout.locations {
+            savedItemLayout = MenuBarItemLayout(locations: locations)
+            savedItemLayout.save()
+            hasSavedItemLayout = true
+        }
+
+        return misplacedItems
+    }
+}
+
+// MARK: - Rescue Items
+
+extension MenuBarItemManager {
+    /// A Boolean value that indicates whether misplaced items can currently
+    /// be rescued.
+    private var canRescueMisplacedItems: Bool {
+        guard
+            let appState,
+            let alwaysHiddenSection = appState.menuBarManager.section(withName: .alwaysHidden),
+            alwaysHiddenSection.isEnabled,
+            alwaysHiddenSection.isHidden
+        else {
+            // The always-hidden section is disabled, or is currently shown.
+            return false
+        }
+        guard !isMouseButtonDown, !isMovingItem, !mouseHasRecentlyMoved else {
+            return false
+        }
+        return NSEvent.modifierFlags.isEmpty
+    }
+
+    /// Returns a Boolean value that indicates whether a rescue can currently
+    /// be attempted for the given item.
+    ///
+    /// - Parameter item: The item to check.
+    private func canAttemptRescue(of item: MenuBarItem) -> Bool {
+        guard item.isMovable else {
+            return false
+        }
+        guard let lastRescueDate = lastRescueDates[item.info] else {
+            return true
+        }
+        return Date.now.timeIntervalSince(lastRescueDate) >= Self.rescueCooldown
+    }
+
+    /// Rescues the given items, returning them to their saved locations.
+    ///
+    /// - Parameters:
+    ///   - items: The items to rescue.
+    ///   - hiddenControlItem: The control item for the hidden section.
+    private func rescueMisplacedItems(_ items: [MenuBarItem], hiddenControlItem: MenuBarItem) {
+        guard !items.isEmpty else {
+            return
+        }
+        Task {
+            await rescueMisplacedItems(items, hiddenControlItem: hiddenControlItem)
+        }
+    }
+
+    /// Rescues the given items, returning them to their saved locations.
+    ///
+    /// - Parameters:
+    ///   - items: The items to rescue.
+    ///   - hiddenControlItem: The control item for the hidden section.
+    private func rescueMisplacedItems(_ items: [MenuBarItem], hiddenControlItem: MenuBarItem) async {
+        guard !isRescuingItems else {
+            return
+        }
+        isRescuingItems = true
+        defer {
+            isRescuingItems = false
+        }
+
+        for item in items.prefix(Self.maxRescueCount) {
+            guard canRescueMisplacedItems else {
+                Logger.itemManager.debug("Not rescuing \(item.logString), as an item may be in use")
+                return
+            }
+            guard canAttemptRescue(of: item) else {
+                continue
+            }
+            guard let destination = savedItemLayout.restoreDestination(
+                for: item,
+                in: itemCache,
+                hiddenControlItem: hiddenControlItem
+            ) else {
+                continue
+            }
+
+            Logger.itemManager.info("Returning \(item.logString) to \(destination.logString)")
+
+            do {
+                try await move(item: item, to: destination)
+                rescueAttemptCounts[item.info] = nil
+                lastRescueDates[item.info] = .now
+            } catch {
+                rescueAttemptCounts[item.info, default: 0] += 1
+                lastRescueDates[item.info] = .now
+                // Reset the signature, as the item is still misplaced. Without
+                // this, the item would not be reevaluated until the menu bar
+                // items change.
+                cachedItemSignature = nil
+                Logger.itemManager.error("Failed to return \(item.logString) (error: \(error))")
+            }
         }
     }
 }
