@@ -646,7 +646,7 @@ extension MenuBarItemManager {
             return
         }
         Task {
-            await rescueMisplacedItems(items, hiddenControlItem: hiddenControlItem)
+            await performRescue(of: items, hiddenControlItem: hiddenControlItem)
         }
     }
 
@@ -655,7 +655,7 @@ extension MenuBarItemManager {
     /// - Parameters:
     ///   - items: The items to rescue.
     ///   - hiddenControlItem: The control item for the hidden section.
-    private func rescueMisplacedItems(_ items: [MenuBarItem], hiddenControlItem: MenuBarItem) async {
+    private func performRescue(of items: [MenuBarItem], hiddenControlItem: MenuBarItem) async {
         guard !isRescuingItems else {
             return
         }
