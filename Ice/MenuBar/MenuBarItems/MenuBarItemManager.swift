@@ -765,11 +765,19 @@ extension MenuBarItemManager {
 
         guard
             let item,
-            item.info != .hiddenControlItem,
-            item.info != .alwaysHiddenControlItem,
-            movedFromFrame(item, framesBeforeMouseDown),
-            let section = section(of: item, in: items)
+            movedFromFrame(item, framesBeforeMouseDown)
         else {
+            return
+        }
+
+        if item.info == .hiddenControlItem || item.info == .alwaysHiddenControlItem {
+            // The user moved a section divider, so the sections are now
+            // arranged the way they want. Follow the new arrangement.
+            adoptSections(of: items)
+            return
+        }
+
+        guard let section = section(of: item, in: items) else {
             return
         }
 
@@ -796,6 +804,43 @@ extension MenuBarItemManager {
         lastRescueDates[info] = nil
 
         Logger.itemManager.info("Recorded user placement of \(info.description) in section \(section.rawValue)")
+    }
+
+    /// Records the section that each item is currently in, so that moving a
+    /// section divider updates the saved layout.
+    ///
+    /// - Parameter items: The current menu bar items.
+    private func adoptSections(of items: [MenuBarItem]) {
+        var locations = savedItemLayout.locations
+        var changed = false
+        for item in items {
+            guard
+                item.info != .hiddenControlItem,
+                item.info != .alwaysHiddenControlItem,
+                let section = section(of: item, in: items)
+            else {
+                continue
+            }
+            let info = item.info.namespace.optional != nil
+                ? item.info
+                : (savedItemLayout.location(for: item.info)?.info ?? item.info)
+            if let index = locations.firstIndex(where: { $0.info == info }) {
+                if locations[index].section != section {
+                    locations[index] = SavedItemLocation(info: info, section: section)
+                    changed = true
+                }
+            } else {
+                locations.append(SavedItemLocation(info: info, section: section))
+                changed = true
+            }
+        }
+        guard changed else {
+            return
+        }
+        savedItemLayout = MenuBarItemLayout(locations: locations)
+        savedItemLayout.save()
+        hasSavedItemLayout = true
+        Logger.itemManager.info("Recorded user placement of section dividers")
     }
 
     /// Returns a Boolean value that indicates whether the item moved from the
