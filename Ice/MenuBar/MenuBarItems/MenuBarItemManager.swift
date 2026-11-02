@@ -169,6 +169,13 @@ final class MenuBarItemManager: ObservableObject {
     /// the menu bar, used to detect a drag that rearranges the items.
     private var menuBarItemFramesBeforeMouseDown: [CGWindowID: CGRect]?
 
+    /// The window identifier of the item beneath the cursor when the mouse
+    /// button was pressed, used to identify the item that a drag moved.
+    private var draggedItemWindowID: CGWindowID?
+
+    /// A Boolean value that indicates whether a drag check is in progress.
+    private var isCheckingForUserItemDrag = false
+
     /// The time at which the current rescue attempt started.
     private var rescueStartDate: Date?
 
@@ -569,6 +576,9 @@ extension MenuBarItemManager {
         var locations = [SavedItemLocation]()
         var misplacedItems = [MenuBarItem]()
         var savedInfos = Set<MenuBarItemInfo>()
+        // The window identifiers are only known after a cache pass, so the
+        // first pass after launch sees every item as newly created.
+        let isFirstPass = previousWindowIDs.isEmpty
 
         for section in MenuBarSection.Name.menuBarOrder {
             for item in newCache[section] {
@@ -591,26 +601,20 @@ extension MenuBarItemManager {
                 var sectionForLocation = section
 
                 // An item that the system created again can appear in a
-                // different section than the one it belongs to. Items that keep
-                // their window can only move between sections when the user
-                // drags them, so they are not returned on their own.
+                // different section than the one it belongs to.
                 let isNewWindow = !previousWindowIDs.contains(item.windowID)
 
                 var isMisplaced = false
 
-                if let savedSection, savedSection != section {
-                    // The item is not in the section it belongs to. Keep the
-                    // saved section, so that the item can be returned to it.
-                    sectionForLocation = savedSection
-                    isMisplaced = isNewWindow || section == .alwaysHidden
-                } else if section == .alwaysHidden, savedSection == nil {
-                    // The system placed the item in the always-hidden section.
-                    // New items are added to the far left of the menu bar, which
-                    // is where this section is located, so return the item to
-                    // the hidden section.
-                    sectionForLocation = .hidden
-                    isMisplaced = true
-                }
+                let resolution = MenuBarItemLayout.resolveLocation(
+                    saved: savedSection,
+                    observed: section,
+                    isNewWindow: isNewWindow,
+                    isFirstPass: isFirstPass,
+                    isMovable: item.isMovable
+                )
+                sectionForLocation = resolution.section
+                isMisplaced = resolution.isMisplaced
 
                 if
                     isMisplaced,
@@ -680,6 +684,7 @@ extension MenuBarItemManager {
     /// pressed inside the menu bar, so that a drag can be detected when the
     /// button is released.
     private func captureMenuBarItemFrames() {
+        draggedItemWindowID = nil
         guard
             !isMovingItem,
             appState?.eventManager.isMouseInsideMenuBar == true
@@ -694,6 +699,15 @@ extension MenuBarItemManager {
             }
             frames[windowID] = frame
         }
+        // The item that the user is dragging is the one beneath the cursor.
+        // Prefer the narrowest frame, so that an expanded control item, which
+        // spans the entire menu bar, does not shadow the item.
+        if let location = MouseCursor.locationCoreGraphics {
+            draggedItemWindowID = frames
+                .filter { $0.value.contains(location) }
+                .min { $0.value.width < $1.value.width }?
+                .key
+        }
         menuBarItemFramesBeforeMouseDown = frames.isEmpty ? nil : frames
     }
 
@@ -701,52 +715,59 @@ extension MenuBarItemManager {
     /// item, after giving the menu bar a moment to settle.
     private func scheduleUserItemDragCheck() {
         guard let framesBeforeMouseDown = menuBarItemFramesBeforeMouseDown else {
+            draggedItemWindowID = nil
             return
         }
+        let draggedWindowID = draggedItemWindowID
         menuBarItemFramesBeforeMouseDown = nil
+        draggedItemWindowID = nil
+        isCheckingForUserItemDrag = true
         Task {
-            try? await Task.sleep(for: .milliseconds(350))
-            recordUserItemDrag(from: framesBeforeMouseDown)
+            let items = await waitForMenuBarItemsToSettle()
+            recordUserItemDrag(
+                windowID: draggedWindowID,
+                from: framesBeforeMouseDown,
+                items: items
+            )
+            isCheckingForUserItemDrag = false
         }
     }
 
     /// Records the section that the user moved a menu bar item into, so that
     /// Ice does not return the item to a different section.
     ///
-    /// - Parameter framesBeforeMouseDown: The frames of the menu bar items
-    ///   before the drag began.
-    private func recordUserItemDrag(from framesBeforeMouseDown: [CGWindowID: CGRect]) {
-        guard
-            !isMovingItem,
-            let mouseLocation = MouseCursor.locationCoreGraphics
-        else {
+    /// - Parameters:
+    ///   - windowID: The window identifier of the dragged item, if known.
+    ///   - framesBeforeMouseDown: The frames of the menu bar items before the
+    ///     drag began.
+    ///   - items: The menu bar items after the drag settled.
+    private func recordUserItemDrag(
+        windowID: CGWindowID?,
+        from framesBeforeMouseDown: [CGWindowID: CGRect],
+        items: [MenuBarItem]
+    ) {
+        guard !isMovingItem else {
             return
         }
 
-        let items = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
-        let movedItems = items.filter { item in
-            guard let oldFrame = framesBeforeMouseDown[item.windowID] else {
-                return false
+        let item: MenuBarItem?
+        if let windowID {
+            item = items.first { $0.windowID == windowID }
+        } else if let mouseLocation = MouseCursor.locationCoreGraphics {
+            // Fall back to the item that ended up beneath the pointer.
+            item = items.first { item in
+                movedFromFrame(item, framesBeforeMouseDown) &&
+                item.frame.insetBy(dx: -8, dy: 0).contains(mouseLocation)
             }
-            return abs(oldFrame.minX - item.frame.minX) > 2
-        }
-
-        // The item that the user dragged is the one that ended up beneath the
-        // pointer. Other items may have moved as well, to make room for it.
-        let nearestItem = movedItems.min { lhs, rhs in
-            horizontalDistance(from: mouseLocation.x, to: lhs.frame) <
-            horizontalDistance(from: mouseLocation.x, to: rhs.frame)
-        }
-        guard
-            let item = nearestItem,
-            item.frame.insetBy(dx: -8, dy: 0).contains(mouseLocation)
-        else {
-            return
+        } else {
+            item = nil
         }
 
         guard
+            let item,
             item.info != .hiddenControlItem,
             item.info != .alwaysHiddenControlItem,
+            movedFromFrame(item, framesBeforeMouseDown),
             let section = section(of: item, in: items)
         else {
             return
@@ -777,17 +798,54 @@ extension MenuBarItemManager {
         Logger.itemManager.info("Recorded user placement of \(info.description) in section \(section.rawValue)")
     }
 
-    /// Returns the distance from the given point to the given frame along the
-    /// horizontal axis.
+    /// Returns a Boolean value that indicates whether the item moved from the
+    /// frame that it had before the mouse button was pressed.
     ///
     /// - Parameters:
-    ///   - x: The horizontal coordinate of the point.
-    ///   - frame: The frame to measure the distance to.
-    private func horizontalDistance(from x: CGFloat, to frame: CGRect) -> CGFloat {
-        if frame.minX <= x, x <= frame.maxX {
-            return 0
+    ///   - item: The item to check.
+    ///   - framesBeforeMouseDown: The frames of the menu bar items before the
+    ///     drag began.
+    private func movedFromFrame(
+        _ item: MenuBarItem,
+        _ framesBeforeMouseDown: [CGWindowID: CGRect]
+    ) -> Bool {
+        guard let oldFrame = framesBeforeMouseDown[item.windowID] else {
+            return false
         }
-        return min(abs(x - frame.minX), abs(x - frame.maxX))
+        return abs(oldFrame.minX - item.frame.minX) > 2
+    }
+
+    /// Waits for the menu bar items to stop moving, so that the section that a
+    /// drag ended in can be determined from their settled frames.
+    private func waitForMenuBarItemsToSettle() async -> [MenuBarItem] {
+        var items = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
+        var frames = menuBarItemFrames(of: items)
+        var stablePasses = 0
+        let deadline = Date.now.addingTimeInterval(3)
+        while Date.now < deadline {
+            try? await Task.sleep(for: .milliseconds(120))
+            items = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
+            let newFrames = menuBarItemFrames(of: items)
+            if newFrames == frames {
+                stablePasses += 1
+            } else {
+                stablePasses = 0
+            }
+            frames = newFrames
+            if stablePasses >= 2 {
+                break
+            }
+        }
+        return items
+    }
+
+    /// Returns the frames of the given menu bar items, keyed by window ID.
+    private func menuBarItemFrames(of items: [MenuBarItem]) -> [CGWindowID: CGRect] {
+        var frames = [CGWindowID: CGRect]()
+        for item in items {
+            frames[item.windowID] = item.frame
+        }
+        return frames
     }
 
     /// Returns the section that contains the given item.
@@ -834,7 +892,12 @@ extension MenuBarItemManager {
         else {
             return false
         }
-        guard !isMouseButtonDown, !isMovingItem, !mouseHasRecentlyMoved else {
+        guard
+            !isMouseButtonDown,
+            !isMovingItem,
+            !isCheckingForUserItemDrag,
+            !mouseHasRecentlyMoved
+        else {
             return false
         }
         return NSEvent.modifierFlags.isEmpty

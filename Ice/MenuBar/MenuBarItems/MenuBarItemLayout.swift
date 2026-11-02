@@ -145,6 +145,64 @@ struct MenuBarItemLayout: Codable, Hashable {
     func section(for info: MenuBarItemInfo) -> MenuBarSection.Name? {
         location(for: info)?.section
     }
+
+    /// Returns the section to record for an item, and whether the item should
+    /// be returned to its saved section.
+    ///
+    /// Items that keep their window can only change sections when something
+    /// moves them in the menu bar, so the observed section is authoritative.
+    /// Items that are created again, and items that the menu bar layout pushed
+    /// into the always-hidden section, are returned to their saved section.
+    ///
+    /// - Parameters:
+    ///   - saved: The saved section of the item, if any.
+    ///   - observed: The section that currently contains the item.
+    ///   - isNewWindow: Whether the item was created again by its app.
+    ///   - isFirstPass: Whether this is the first cache pass after launch.
+    ///   - isMovable: Whether Ice can move the item.
+    static func resolveLocation(
+        saved: MenuBarSection.Name?,
+        observed: MenuBarSection.Name,
+        isNewWindow: Bool,
+        isFirstPass: Bool,
+        isMovable: Bool
+    ) -> (section: MenuBarSection.Name, isMisplaced: Bool) {
+        // Ice can't move the item, so record where it actually is.
+        guard isMovable else {
+            return (observed, false)
+        }
+        if observed == .alwaysHidden {
+            if let saved, saved != observed {
+                // The user's drags are recorded when they end, so an item
+                // that still has a different saved section was pushed here
+                // by the menu bar layout. Return it to its saved section.
+                return (saved, true)
+            }
+            if saved == nil {
+                // New items are added to the far left of the menu bar, which
+                // is where the always-hidden section is located.
+                return (.hidden, true)
+            }
+            return (observed, false)
+        }
+        if isFirstPass {
+            // The menu bar restored the arrangement that was in place when
+            // the app last quit, so follow it. This also brings the saved
+            // sections back in step after they were saved by an older
+            // version that did not follow the menu bar.
+            return (observed, false)
+        }
+        guard let saved, saved != observed else {
+            return (observed, false)
+        }
+        if isNewWindow {
+            // The item was created again, which can place it in a different
+            // section. Return it to its saved section.
+            return (saved, true)
+        }
+        // The item kept its window, so the change was made in the menu bar.
+        return (observed, false)
+    }
 }
 
 // MARK: - Destinations
