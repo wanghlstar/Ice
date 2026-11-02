@@ -172,6 +172,14 @@ final class MenuBarItemManager: ObservableObject {
     /// The time at which the current rescue attempt started.
     private var rescueStartDate: Date?
 
+    /// The number of consecutive cache passes in which an item has been
+    /// observed in the always-hidden section at a stable position.
+    private var misplacedPassCounts = [MenuBarItemInfo: Int]()
+
+    /// The frame of each item during the most recent cache pass in which it
+    /// was observed in the always-hidden section.
+    private var lastMisplacedFrames = [MenuBarItemInfo: CGRect]()
+
     /// Event type mask for tracking mouse events.
     private let mouseTrackingMask: NSEvent.EventTypeMask = [
         .mouseMoved,
@@ -201,6 +209,12 @@ final class MenuBarItemManager: ObservableObject {
 
     /// The amount of time after which a rescue operation is considered stuck.
     private static let rescueTimeout: TimeInterval = 120
+
+    /// The number of consecutive cache passes in which an item must be
+    /// observed in the always-hidden section before it is rescued. Items move
+    /// through this section while the menu bar is settling, and a single pass
+    /// should not trigger a move.
+    private static let rescueDebouncePasses = 2
 
     /// A Boolean value that indicates whether a menu bar item, or
     /// group of menu bar items is being moved.
@@ -567,12 +581,31 @@ extension MenuBarItemManager {
                         // so return the item to the section it belongs to.
                         sectionForLocation = savedSection ?? .hidden
                         if hasSavedItemLayout, item.isMovable, !isTempShown(item) {
-                            misplacedItems.append(item)
+                            // Require a stable position across multiple passes,
+                            // so that an item that is passing through the
+                            // section while the menu bar settles is not moved.
+                            let previousFrame = lastMisplacedFrames[info]
+                            let isStable = previousFrame.map { previous in
+                                abs(previous.minX - item.frame.minX) <= 1
+                            } ?? false
+                            let passCount = isStable
+                                ? (misplacedPassCounts[info] ?? 0) + 1
+                                : 1
+                            misplacedPassCounts[info] = passCount
+                            lastMisplacedFrames[info] = item.frame
+                            if passCount >= Self.rescueDebouncePasses {
+                                misplacedItems.append(item)
+                            }
+                        } else {
+                            misplacedPassCounts[info] = nil
+                            lastMisplacedFrames[info] = nil
                         }
                     }
                 } else {
                     rescueAttemptCounts[info] = nil
                     lastRescueDates[info] = nil
+                    misplacedPassCounts[info] = nil
+                    lastMisplacedFrames[info] = nil
                 }
 
                 locations.append(SavedItemLocation(info: info, section: sectionForLocation))
