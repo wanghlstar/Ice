@@ -157,10 +157,13 @@ extension MenuBarItemLayout {
     ///   - item: The item to return a destination for.
     ///   - cache: The current menu bar item cache.
     ///   - hiddenControlItem: The control item for the hidden section.
+    ///   - alwaysHiddenControlItem: The control item for the always-hidden
+    ///     section, if the section is enabled.
     func restoreDestination(
         for item: MenuBarItem,
         in cache: MenuBarItemManager.ItemCache,
-        hiddenControlItem: MenuBarItem
+        hiddenControlItem: MenuBarItem,
+        alwaysHiddenControlItem: MenuBarItem?
     ) -> MenuBarItemManager.MoveDestination? {
         guard
             let location = location(for: item.info),
@@ -176,8 +179,14 @@ extension MenuBarItemLayout {
 
         switch location.section {
         case .alwaysHidden:
-            // The item was deliberately placed in the always-hidden section.
-            return nil
+            // The item was deliberately placed in the always-hidden section,
+            // but the system may place it elsewhere when the item is created
+            // again. Return it to the always-hidden section.
+            guard let alwaysHiddenControlItem else {
+                return nil
+            }
+            return destination(for: index, section: .alwaysHidden, in: cache)
+                ?? .leftOfItem(alwaysHiddenControlItem)
         case .hidden:
             return destination(for: index, section: .hidden, in: cache)
                 ?? .leftOfItem(hiddenControlItem)

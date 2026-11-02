@@ -172,6 +172,12 @@ final class MenuBarItemManager: ObservableObject {
     /// The time at which the current rescue attempt started.
     private var rescueStartDate: Date?
 
+    /// The window identifiers of the menu bar items from the previous update.
+    ///
+    /// Items whose window identifier is new were created again by their app,
+    /// which can cause them to appear in a different section.
+    private var knownItemWindowIDs = Set<CGWindowID>()
+
     /// The number of consecutive cache passes in which an item has been
     /// observed in the always-hidden section at a stable position.
     private var misplacedPassCounts = [MenuBarItemInfo: Int]()
@@ -450,6 +456,8 @@ extension MenuBarItemManager {
             return
         }
 
+        let previousWindowIDs = knownItemWindowIDs
+
         var items = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
         let allItems = items
 
@@ -489,11 +497,19 @@ extension MenuBarItemManager {
             return
         }
 
-        let misplacedItems = reconcileSavedItemLayout(newCache: itemCache)
+        let misplacedItems = reconcileSavedItemLayout(
+            previousWindowIDs: previousWindowIDs,
+            newCache: itemCache
+        )
 
         cachedItemSignature = signature
+        knownItemWindowIDs = Set(allItems.map(\.windowID))
 
-        rescueMisplacedItems(misplacedItems, hiddenControlItem: hiddenControlItem)
+        rescueMisplacedItems(
+            misplacedItems,
+            hiddenControlItem: hiddenControlItem,
+            alwaysHiddenControlItem: alwaysHiddenControlItem
+        )
     }
 }
 
@@ -526,19 +542,24 @@ extension MenuBarItemManager {
 
 extension MenuBarItemManager {
     /// Updates the saved layout to match the given cache, returning the items
-    /// that the system placed in the always-hidden section.
+    /// that are not in the section they belong to.
     ///
-    /// An item is only considered to belong to the always-hidden section if the
-    /// user was observed placing it there with a drag. Items that the system
-    /// placed in the section are returned to the section they belong to, and
-    /// items that cannot currently be moved are never recorded as
-    /// always-hidden, so that a failed rescue does not make the misplacement
-    /// permanent.
+    /// An item is only recorded as belonging to the always-hidden section if
+    /// the user was observed placing it there with a drag. Items that the
+    /// system created again in a different section are returned to the section
+    /// they belong to, and items that cannot currently be moved are never
+    /// recorded as always-hidden, so that a failed move does not make a
+    /// misplacement permanent.
     ///
-    /// - Parameter newCache: The current cache.
+    /// - Parameters:
+    ///   - previousWindowIDs: The window identifiers from the previous update.
+    ///   - newCache: The current cache.
     ///
     /// - Returns: The items to return to their saved locations.
-    private func reconcileSavedItemLayout(newCache: ItemCache) -> [MenuBarItem] {
+    private func reconcileSavedItemLayout(
+        previousWindowIDs: Set<CGWindowID>,
+        newCache: ItemCache
+    ) -> [MenuBarItem] {
         func isTempShown(_ item: MenuBarItem) -> Bool {
             tempShownItemContexts.contains { context in
                 context.windowID == item.windowID || context.info == item.info
@@ -569,37 +590,48 @@ extension MenuBarItemManager {
                 let savedSection = savedItemLayout.section(for: item.info)
                 var sectionForLocation = section
 
-                if section == .alwaysHidden {
-                    if savedSection == .alwaysHidden {
-                        // The item was deliberately placed in the always-hidden
-                        // section by the user. This section is only recorded when
-                        // a drag by the user is observed, so leave the item alone.
-                    } else {
-                        // The item belongs to another section. New items are
-                        // added to the far left of the menu bar by the system,
-                        // which is where the always-hidden section is located,
-                        // so return the item to the section it belongs to.
-                        sectionForLocation = savedSection ?? .hidden
-                        if hasSavedItemLayout, item.isMovable, !isTempShown(item) {
-                            // Require a stable position across multiple passes,
-                            // so that an item that is passing through the
-                            // section while the menu bar settles is not moved.
-                            let previousFrame = lastMisplacedFrames[info]
-                            let isStable = previousFrame.map { previous in
-                                abs(previous.minX - item.frame.minX) <= 1
-                            } ?? false
-                            let passCount = isStable
-                                ? (misplacedPassCounts[info] ?? 0) + 1
-                                : 1
-                            misplacedPassCounts[info] = passCount
-                            lastMisplacedFrames[info] = item.frame
-                            if passCount >= Self.rescueDebouncePasses {
-                                misplacedItems.append(item)
-                            }
-                        } else {
-                            misplacedPassCounts[info] = nil
-                            lastMisplacedFrames[info] = nil
-                        }
+                // An item that the system created again can appear in a
+                // different section than the one it belongs to. Items that keep
+                // their window can only move between sections when the user
+                // drags them, so they are not returned on their own.
+                let isNewWindow = !previousWindowIDs.contains(item.windowID)
+
+                var isMisplaced = false
+
+                if let savedSection, savedSection != section {
+                    // The item is not in the section it belongs to. Keep the
+                    // saved section, so that the item can be returned to it.
+                    sectionForLocation = savedSection
+                    isMisplaced = isNewWindow || section == .alwaysHidden
+                } else if section == .alwaysHidden, savedSection == nil {
+                    // The system placed the item in the always-hidden section.
+                    // New items are added to the far left of the menu bar, which
+                    // is where this section is located, so return the item to
+                    // the hidden section.
+                    sectionForLocation = .hidden
+                    isMisplaced = true
+                }
+
+                if
+                    isMisplaced,
+                    hasSavedItemLayout,
+                    item.isMovable,
+                    !isTempShown(item)
+                {
+                    // Require a stable position across multiple passes, so that
+                    // an item that is passing through the section while the menu
+                    // bar settles is not moved.
+                    let previousFrame = lastMisplacedFrames[info]
+                    let isStable = previousFrame.map { previous in
+                        abs(previous.minX - item.frame.minX) <= 1
+                    } ?? false
+                    let passCount = isStable
+                        ? (misplacedPassCounts[info] ?? 0) + 1
+                        : 1
+                    misplacedPassCounts[info] = passCount
+                    lastMisplacedFrames[info] = item.frame
+                    if passCount >= Self.rescueDebouncePasses {
+                        misplacedItems.append(item)
                     }
                 } else {
                     rescueAttemptCounts[info] = nil
@@ -789,21 +821,35 @@ extension MenuBarItemManager {
 
 extension MenuBarItemManager {
     /// A Boolean value that indicates whether misplaced items can currently
-    /// be rescued.
-    private var canRescueMisplacedItems: Bool {
+    /// be returned to their saved locations.
+    private var canMoveMisplacedItems: Bool {
+        guard let appState else {
+            return false
+        }
+        // The menu bar is not being laid out normally, so item positions do
+        // not reflect the sections they belong to.
         guard
-            let appState,
-            let alwaysHiddenSection = appState.menuBarManager.section(withName: .alwaysHidden),
-            alwaysHiddenSection.isEnabled,
-            alwaysHiddenSection.isHidden
+            !appState.menuBarManager.isMenuBarHiddenBySystem,
+            !appState.isActiveSpaceFullscreen
         else {
-            // The always-hidden section is disabled, or is currently shown.
             return false
         }
         guard !isMouseButtonDown, !isMovingItem, !mouseHasRecentlyMoved else {
             return false
         }
         return NSEvent.modifierFlags.isEmpty
+    }
+
+    /// A Boolean value that indicates whether the always-hidden section is
+    /// enabled and hidden, and can therefore receive items.
+    private var canMoveIntoAlwaysHiddenSection: Bool {
+        guard
+            let alwaysHiddenSection = appState?.menuBarManager.section(withName: .alwaysHidden),
+            alwaysHiddenSection.isEnabled
+        else {
+            return false
+        }
+        return alwaysHiddenSection.isHidden
     }
 
     /// Returns a Boolean value that indicates whether a rescue can currently
@@ -852,12 +898,22 @@ extension MenuBarItemManager {
     /// - Parameters:
     ///   - items: The items to rescue.
     ///   - hiddenControlItem: The control item for the hidden section.
-    private func rescueMisplacedItems(_ items: [MenuBarItem], hiddenControlItem: MenuBarItem) {
+    ///   - alwaysHiddenControlItem: The control item for the always-hidden
+    ///     section, if the section is enabled.
+    private func rescueMisplacedItems(
+        _ items: [MenuBarItem],
+        hiddenControlItem: MenuBarItem,
+        alwaysHiddenControlItem: MenuBarItem?
+    ) {
         guard !items.isEmpty else {
             return
         }
         Task {
-            await performRescue(of: items, hiddenControlItem: hiddenControlItem)
+            await performRescue(
+                of: items,
+                hiddenControlItem: hiddenControlItem,
+                alwaysHiddenControlItem: alwaysHiddenControlItem
+            )
         }
     }
 
@@ -866,7 +922,13 @@ extension MenuBarItemManager {
     /// - Parameters:
     ///   - items: The items to rescue.
     ///   - hiddenControlItem: The control item for the hidden section.
-    private func performRescue(of items: [MenuBarItem], hiddenControlItem: MenuBarItem) async {
+    ///   - alwaysHiddenControlItem: The control item for the always-hidden
+    ///     section, if the section is enabled.
+    private func performRescue(
+        of items: [MenuBarItem],
+        hiddenControlItem: MenuBarItem,
+        alwaysHiddenControlItem: MenuBarItem?
+    ) async {
         guard canStartRescue else {
             return
         }
@@ -878,7 +940,7 @@ extension MenuBarItemManager {
         }
 
         for item in items.prefix(Self.maxRescueCount) {
-            guard canRescueMisplacedItems else {
+            guard canMoveMisplacedItems else {
                 Logger.itemManager.debug("Not rescuing \(item.logString), as an item may be in use")
                 return
             }
@@ -888,9 +950,17 @@ extension MenuBarItemManager {
             guard let destination = savedItemLayout.restoreDestination(
                 for: item,
                 in: itemCache,
-                hiddenControlItem: hiddenControlItem
+                hiddenControlItem: hiddenControlItem,
+                alwaysHiddenControlItem: alwaysHiddenControlItem
             ) else {
                 continue
+            }
+            if savedItemLayout.section(for: item.info) == .alwaysHidden {
+                // Only move items into the always-hidden section while it is
+                // hidden, so that the move is not visible.
+                guard canMoveIntoAlwaysHiddenSection else {
+                    continue
+                }
             }
 
             Logger.itemManager.info("Returning \(item.logString) to \(destination.logString)")
