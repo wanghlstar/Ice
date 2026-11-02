@@ -179,7 +179,15 @@ extension MenuBarItemInfo {
         ///
         /// - Parameter rawValue: The raw value of the namespace.
         init(rawValue: String) {
-            self.init(kind: .rawValue(rawValue))
+            // A namespace that could not be resolved is encoded as the
+            // "<null>" raw value. Restore the null namespace so that it
+            // compares equal to items whose namespace is still unresolved
+            // after a round trip through Codable.
+            if rawValue == "<null>" {
+                self.init(kind: .null)
+            } else {
+                self.init(kind: .rawValue(rawValue))
+            }
         }
 
         /// Creates a namespace with the given raw value.

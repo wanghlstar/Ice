@@ -60,15 +60,6 @@ final class MenuBarItemManager: ObservableObject {
             return nil
         }
 
-        /// Returns the name of the section for the menu bar item with the
-        /// given window identifier.
-        func section(forWindowID windowID: CGWindowID) -> MenuBarSection.Name? {
-            for (section, items) in self.items where items.contains(where: { $0.windowID == windowID }) {
-                return section
-            }
-            return nil
-        }
-
         /// Accesses the items in the given section.
         subscript(section: MenuBarSection.Name) -> [MenuBarItem] {
             get { items[section, default: []] }
@@ -174,6 +165,13 @@ final class MenuBarItemManager: ObservableObject {
     /// A Boolean value that indicates whether a mouse button is down.
     private var isMouseButtonDown = false
 
+    /// The frames of the menu bar items when a mouse button was pressed inside
+    /// the menu bar, used to detect a drag that rearranges the items.
+    private var menuBarItemFramesBeforeMouseDown: [CGWindowID: CGRect]?
+
+    /// The time at which the current rescue attempt started.
+    private var rescueStartDate: Date?
+
     /// Event type mask for tracking mouse events.
     private let mouseTrackingMask: NSEvent.EventTypeMask = [
         .mouseMoved,
@@ -188,13 +186,21 @@ final class MenuBarItemManager: ObservableObject {
     /// The maximum number of items to rescue per cache.
     private static let maxRescueCount = 3
 
-    /// The maximum number of times to attempt to rescue an item before
-    /// leaving it in the always-hidden section.
+    /// The number of failed rescue attempts after which the time between
+    /// attempts is increased. The item is never recorded as always-hidden, so
+    /// it is still rescued if it becomes movable later.
     private static let maxRescueAttempts = 3
 
     /// The minimum amount of time to wait between rescue attempts for the
     /// same item.
     private static let rescueCooldown: TimeInterval = 15
+
+    /// The amount of time to wait between rescue attempts after the maximum
+    /// number of attempts has been reached.
+    private static let abandonedRescueCooldown: TimeInterval = 300
+
+    /// The amount of time after which a rescue operation is considered stuck.
+    private static let rescueTimeout: TimeInterval = 120
 
     /// A Boolean value that indicates whether a menu bar item, or
     /// group of menu bar items is being moved.
@@ -294,8 +300,14 @@ final class MenuBarItemManager: ObservableObject {
                 lastMouseMoveStartDate = .now
             case .leftMouseDown, .rightMouseDown, .otherMouseDown:
                 isMouseButtonDown = true
+                if event.type == .leftMouseDown {
+                    captureMenuBarItemFrames()
+                }
             case .leftMouseUp, .rightMouseUp, .otherMouseUp:
                 isMouseButtonDown = false
+                if event.type == .leftMouseUp {
+                    scheduleUserItemDragCheck()
+                }
             default:
                 break
             }
@@ -440,8 +452,6 @@ extension MenuBarItemManager {
             return
         }
 
-        let previousCache = itemCache
-
         do {
             if let alwaysHiddenControlItem {
                 try await enforceControlItemOrder(
@@ -465,10 +475,7 @@ extension MenuBarItemManager {
             return
         }
 
-        let misplacedItems = reconcileSavedItemLayout(
-            previousCache: previousCache,
-            newCache: itemCache
-        )
+        let misplacedItems = reconcileSavedItemLayout(newCache: itemCache)
 
         cachedItemSignature = signature
 
@@ -507,19 +514,17 @@ extension MenuBarItemManager {
     /// Updates the saved layout to match the given cache, returning the items
     /// that the system placed in the always-hidden section.
     ///
-    /// Items are only considered misplaced if they were not deliberately placed
-    /// in the always-hidden section. Deliberately placed items are recorded in
-    /// the saved layout, and are never returned to another section.
+    /// An item is only considered to belong to the always-hidden section if the
+    /// user was observed placing it there with a drag. Items that the system
+    /// placed in the section are returned to the section they belong to, and
+    /// items that cannot currently be moved are never recorded as
+    /// always-hidden, so that a failed rescue does not make the misplacement
+    /// permanent.
     ///
-    /// - Parameters:
-    ///   - previousCache: The cache from the previous update.
-    ///   - newCache: The current cache.
+    /// - Parameter newCache: The current cache.
     ///
     /// - Returns: The items to return to their saved locations.
-    private func reconcileSavedItemLayout(
-        previousCache: ItemCache,
-        newCache: ItemCache
-    ) -> [MenuBarItem] {
+    private func reconcileSavedItemLayout(newCache: ItemCache) -> [MenuBarItem] {
         func isTempShown(_ item: MenuBarItem) -> Bool {
             tempShownItemContexts.contains { context in
                 context.windowID == item.windowID || context.info == item.info
@@ -532,61 +537,63 @@ extension MenuBarItemManager {
 
         for section in MenuBarSection.Name.menuBarOrder {
             for item in newCache[section] {
+                // Items whose namespace could not be resolved are recorded
+                // under the namespace that was resolved previously, so that a
+                // single item does not end up with multiple locations.
+                let previouslySavedInfo = savedItemLayout.location(for: item.info)?.info
+                let info = item.info.namespace.optional != nil
+                    ? item.info
+                    : (previouslySavedInfo ?? item.info)
+
                 // Items are identified by their info, so only save a single
                 // location for each one. Items that share the same info are
                 // indistinguishable from one another.
-                guard savedInfos.insert(item.info).inserted else {
+                guard savedInfos.insert(info).inserted else {
                     continue
                 }
 
-                var savedSection = section
+                let savedSection = savedItemLayout.section(for: item.info)
+                var sectionForLocation = section
 
                 if section == .alwaysHidden {
-                    let saved = savedItemLayout.section(for: item.info)
-                    let previousSection = previousCache.section(forWindowID: item.windowID)
-                    let attempts = rescueAttemptCounts[item.info] ?? 0
-
-                    if saved == .alwaysHidden {
-                        // The item was deliberately placed in the always-hidden section.
-                    } else if let previousSection, previousSection != .alwaysHidden {
-                        // The item was moved into the always-hidden section since the
-                        // last cache, so it was placed there by the user.
-                        savedSection = .alwaysHidden
-                    } else if
-                        !hasSavedItemLayout
-                            || !item.isMovable
-                            || attempts >= Self.maxRescueAttempts
-                    {
-                        // The item cannot be returned to a saved location, so leave
-                        // it in the always-hidden section.
+                    if savedSection == .alwaysHidden {
+                        // The item was deliberately placed in the always-hidden
+                        // section by the user. This section is only recorded when
+                        // a drag by the user is observed, so leave the item alone.
                     } else {
-                        // The system placed the item in the always-hidden section.
-                        // Record the section that it belongs to, and return it to
-                        // that section when possible.
-                        savedSection = saved ?? .hidden
-                        if !isTempShown(item) {
+                        // The item belongs to another section. New items are
+                        // added to the far left of the menu bar by the system,
+                        // which is where the always-hidden section is located,
+                        // so return the item to the section it belongs to.
+                        sectionForLocation = savedSection ?? .hidden
+                        if hasSavedItemLayout, item.isMovable, !isTempShown(item) {
                             misplacedItems.append(item)
                         }
                     }
+                } else {
+                    rescueAttemptCounts[info] = nil
+                    lastRescueDates[info] = nil
                 }
 
-                if section != .alwaysHidden {
-                    rescueAttemptCounts[item.info] = nil
-                    lastRescueDates[item.info] = nil
-                }
-
-                locations.append(SavedItemLocation(info: item.info, section: savedSection))
+                locations.append(SavedItemLocation(info: info, section: sectionForLocation))
             }
         }
 
         // Preserve the saved locations of items that are not currently in the
         // menu bar, so that they can be returned when they reappear.
         let currentInfos = Set(locations.map(\.info))
-        locations.append(
-            contentsOf: savedItemLayout.locations.filter { location in
-                !currentInfos.contains(location.info)
+        let absentLocations = savedItemLayout.locations.filter { location in
+            if currentInfos.contains(location.info) {
+                return false
             }
-        )
+            // Drop entries that duplicate a recorded item under a different
+            // namespace resolution.
+            return !locations.contains { recorded in
+                recorded.info.title == location.info.title &&
+                (recorded.info.namespace.optional == nil || location.info.namespace.optional == nil)
+            }
+        }
+        locations.append(contentsOf: absentLocations)
         if locations.count > MenuBarItemLayout.maximumLocationCount {
             locations.removeLast(locations.count - MenuBarItemLayout.maximumLocationCount)
         }
@@ -594,10 +601,154 @@ extension MenuBarItemManager {
         if locations != savedItemLayout.locations {
             savedItemLayout = MenuBarItemLayout(locations: locations)
             savedItemLayout.save()
-            hasSavedItemLayout = true
         }
+        hasSavedItemLayout = true
 
         return misplacedItems
+    }
+}
+
+// MARK: - User Item Drags
+
+extension MenuBarItemManager {
+    /// Snapshots the frames of the menu bar items when a mouse button is
+    /// pressed inside the menu bar, so that a drag can be detected when the
+    /// button is released.
+    private func captureMenuBarItemFrames() {
+        guard
+            !isMovingItem,
+            appState?.eventManager.isMouseInsideMenuBar == true
+        else {
+            menuBarItemFramesBeforeMouseDown = nil
+            return
+        }
+        var frames = [CGWindowID: CGRect]()
+        for windowID in Bridging.getWindowList(option: [.menuBarItems, .activeSpace]) {
+            guard let frame = Bridging.getWindowFrame(for: windowID) else {
+                continue
+            }
+            frames[windowID] = frame
+        }
+        menuBarItemFramesBeforeMouseDown = frames.isEmpty ? nil : frames
+    }
+
+    /// Checks whether the mouse press that just ended rearranged a menu bar
+    /// item, after giving the menu bar a moment to settle.
+    private func scheduleUserItemDragCheck() {
+        guard let framesBeforeMouseDown = menuBarItemFramesBeforeMouseDown else {
+            return
+        }
+        menuBarItemFramesBeforeMouseDown = nil
+        Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            recordUserItemDrag(from: framesBeforeMouseDown)
+        }
+    }
+
+    /// Records the section that the user moved a menu bar item into, so that
+    /// Ice does not return the item to a different section.
+    ///
+    /// - Parameter framesBeforeMouseDown: The frames of the menu bar items
+    ///   before the drag began.
+    private func recordUserItemDrag(from framesBeforeMouseDown: [CGWindowID: CGRect]) {
+        guard
+            !isMovingItem,
+            let mouseLocation = MouseCursor.locationCoreGraphics
+        else {
+            return
+        }
+
+        let items = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
+        let movedItems = items.filter { item in
+            guard let oldFrame = framesBeforeMouseDown[item.windowID] else {
+                return false
+            }
+            return abs(oldFrame.minX - item.frame.minX) > 2
+        }
+
+        // The item that the user dragged is the one that ended up beneath the
+        // pointer. Other items may have moved as well, to make room for it.
+        let nearestItem = movedItems.min { lhs, rhs in
+            horizontalDistance(from: mouseLocation.x, to: lhs.frame) <
+            horizontalDistance(from: mouseLocation.x, to: rhs.frame)
+        }
+        guard
+            let item = nearestItem,
+            item.frame.insetBy(dx: -8, dy: 0).contains(mouseLocation)
+        else {
+            return
+        }
+
+        guard
+            item.info != .hiddenControlItem,
+            item.info != .alwaysHiddenControlItem,
+            let section = section(of: item, in: items)
+        else {
+            return
+        }
+
+        let previouslySavedInfo = savedItemLayout.location(for: item.info)?.info
+        let info = item.info.namespace.optional != nil
+            ? item.info
+            : (previouslySavedInfo ?? item.info)
+
+        guard savedItemLayout.section(for: info) != section else {
+            return
+        }
+
+        var locations = savedItemLayout.locations.filter { location in
+            // Drop the previous location of the item, along with a location
+            // that was recorded under an unresolved namespace.
+            location.info != info &&
+            !(location.info.namespace.optional == nil && location.info.title == info.title)
+        }
+        locations.append(SavedItemLocation(info: info, section: section))
+        savedItemLayout = MenuBarItemLayout(locations: locations)
+        savedItemLayout.save()
+        hasSavedItemLayout = true
+        rescueAttemptCounts[info] = nil
+        lastRescueDates[info] = nil
+
+        Logger.itemManager.info("Recorded user placement of \(info.description) in section \(section.rawValue)")
+    }
+
+    /// Returns the distance from the given point to the given frame along the
+    /// horizontal axis.
+    ///
+    /// - Parameters:
+    ///   - x: The horizontal coordinate of the point.
+    ///   - frame: The frame to measure the distance to.
+    private func horizontalDistance(from x: CGFloat, to frame: CGRect) -> CGFloat {
+        if frame.minX <= x, x <= frame.maxX {
+            return 0
+        }
+        return min(abs(x - frame.minX), abs(x - frame.maxX))
+    }
+
+    /// Returns the section that contains the given item.
+    ///
+    /// - Parameters:
+    ///   - item: The item to return the section for.
+    ///   - items: The current menu bar items.
+    private func section(of item: MenuBarItem, in items: [MenuBarItem]) -> MenuBarSection.Name? {
+        guard let hiddenControlItem = items.first(where: { $0.info == .hiddenControlItem }) else {
+            return nil
+        }
+        let alwaysHiddenControlItem = items.first(where: { $0.info == .alwaysHiddenControlItem })
+        let predicates = Predicates.sectionPredicates(
+            hiddenControlItem: hiddenControlItem,
+            alwaysHiddenControlItem: alwaysHiddenControlItem
+        )
+        if predicates.isInVisibleSection(item) {
+            return .visible
+        }
+        if predicates.isInHiddenSection(item) {
+            return .hidden
+        }
+        if predicates.isInAlwaysHiddenSection(item) {
+            return .alwaysHidden
+        }
+        return nil
     }
 }
 
@@ -630,10 +781,37 @@ extension MenuBarItemManager {
         guard item.isMovable else {
             return false
         }
-        guard let lastRescueDate = lastRescueDates[item.info] else {
+        let key = rescueKey(for: item)
+        guard let lastRescueDate = lastRescueDates[key] else {
             return true
         }
-        return Date.now.timeIntervalSince(lastRescueDate) >= Self.rescueCooldown
+        let attempts = rescueAttemptCounts[key] ?? 0
+        let cooldown = attempts >= Self.maxRescueAttempts
+            ? Self.abandonedRescueCooldown
+            : Self.rescueCooldown
+        return Date.now.timeIntervalSince(lastRescueDate) >= cooldown
+    }
+
+    /// Returns the key used to track rescue attempts for the given item.
+    ///
+    /// - Parameter item: The item to return the key for.
+    private func rescueKey(for item: MenuBarItem) -> MenuBarItemInfo {
+        savedItemLayout.location(for: item.info)?.info ?? item.info
+    }
+
+    /// A Boolean value that indicates whether a new rescue operation can
+    /// currently begin.
+    private var canStartRescue: Bool {
+        guard isRescuingItems else {
+            return true
+        }
+        guard let rescueStartDate else {
+            return true
+        }
+        // A rescue operation can get stuck waiting for a modifier key or a
+        // mouse button to be released. Don't let it block later rescues
+        // forever.
+        return Date.now.timeIntervalSince(rescueStartDate) > Self.rescueTimeout
     }
 
     /// Rescues the given items, returning them to their saved locations.
@@ -656,12 +834,14 @@ extension MenuBarItemManager {
     ///   - items: The items to rescue.
     ///   - hiddenControlItem: The control item for the hidden section.
     private func performRescue(of items: [MenuBarItem], hiddenControlItem: MenuBarItem) async {
-        guard !isRescuingItems else {
+        guard canStartRescue else {
             return
         }
         isRescuingItems = true
+        rescueStartDate = .now
         defer {
             isRescuingItems = false
+            rescueStartDate = nil
         }
 
         for item in items.prefix(Self.maxRescueCount) {
@@ -682,13 +862,17 @@ extension MenuBarItemManager {
 
             Logger.itemManager.info("Returning \(item.logString) to \(destination.logString)")
 
+            let key = rescueKey(for: item)
             do {
                 try await move(item: item, to: destination)
-                rescueAttemptCounts[item.info] = nil
-                lastRescueDates[item.info] = .now
+                // Count every attempt. The count is cleared once the item is
+                // observed in another section, which also covers a move that
+                // reported success without taking effect.
+                rescueAttemptCounts[key, default: 0] += 1
+                lastRescueDates[key] = .now
             } catch {
-                rescueAttemptCounts[item.info, default: 0] += 1
-                lastRescueDates[item.info] = .now
+                rescueAttemptCounts[key, default: 0] += 1
+                lastRescueDates[key] = .now
                 // Reset the signature, as the item is still misplaced. Without
                 // this, the item would not be reevaluated until the menu bar
                 // items change.
