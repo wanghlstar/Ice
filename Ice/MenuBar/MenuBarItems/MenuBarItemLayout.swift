@@ -185,14 +185,14 @@ struct MenuBarItemLayout: Codable, Hashable {
             }
             return (observed, false)
         }
+        if saved == .alwaysHidden {
+            // The always-hidden divider may not be in the position that the
+            // user chose, which reclassifies the item. The user explicitly
+            // placed the item in the always-hidden section, so return it
+            // there until an explicit user action records it elsewhere.
+            return (.alwaysHidden, true)
+        }
         if isFirstPass {
-            if saved == .alwaysHidden {
-                // The always-hidden divider may not have been restored to the
-                // position that the user chose, which reclassifies the item.
-                // The user explicitly placed it in the always-hidden section,
-                // so return it there.
-                return (.alwaysHidden, true)
-            }
             // The menu bar restored the arrangement that was in place when
             // the app last quit, so follow it. This also brings the saved
             // sections back in step after they were saved by an older
