@@ -586,6 +586,14 @@ extension MenuBarItemManager {
                 // under the namespace that was resolved previously, so that a
                 // single item does not end up with multiple locations.
                 let previouslySavedInfo = savedItemLayout.location(for: item.info)?.info
+
+                // Without a namespace, the item can't be identified reliably,
+                // so leave its saved location alone until the namespace can be
+                // resolved again. This happens while an app is restarting.
+                guard item.info.namespace.optional != nil || previouslySavedInfo != nil else {
+                    continue
+                }
+
                 let info = item.info.namespace.optional != nil
                     ? item.info
                     : (previouslySavedInfo ?? item.info)
@@ -803,7 +811,7 @@ extension MenuBarItemManager {
         rescueAttemptCounts[info] = nil
         lastRescueDates[info] = nil
 
-        Logger.itemManager.info("Recorded user placement of \(info.description) in section \(section.rawValue)")
+        Logger.itemManager.notice("Recorded user placement of \(info.description) in section \(section.rawValue)")
     }
 
     /// Records the section that each item is currently in, so that moving a
@@ -840,7 +848,7 @@ extension MenuBarItemManager {
         savedItemLayout = MenuBarItemLayout(locations: locations)
         savedItemLayout.save()
         hasSavedItemLayout = true
-        Logger.itemManager.info("Recorded user placement of section dividers")
+        Logger.itemManager.notice("Recorded user placement of section dividers")
     }
 
     /// Returns a Boolean value that indicates whether the item moved from the
@@ -1071,7 +1079,7 @@ extension MenuBarItemManager {
                 }
             }
 
-            Logger.itemManager.info("Returning \(item.logString) to \(destination.logString)")
+            Logger.itemManager.notice("Returning \(item.logString) to \(destination.logString)")
 
             let key = rescueKey(for: item)
             do {

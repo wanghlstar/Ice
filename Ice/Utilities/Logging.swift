@@ -20,6 +20,14 @@ struct Logger {
         base.info("\(message, privacy: .public)")
     }
 
+    /// Logs the given notice message to the logger.
+    ///
+    /// Notices are persisted by the unified logging system, unlike info and
+    /// debug messages, so they remain available for later diagnosis.
+    func notice(_ message: String) {
+        base.notice("\(message, privacy: .public)")
+    }
+
     /// Logs the given debug message to the logger.
     func debug(_ message: String) {
         base.debug("\(message, privacy: .public)")
