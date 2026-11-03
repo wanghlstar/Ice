@@ -189,9 +189,14 @@ final class MenuBarItemManager: ObservableObject {
     /// observed in the always-hidden section at a stable position.
     private var misplacedPassCounts = [MenuBarItemInfo: Int]()
 
-    /// The frame of each item during the most recent cache pass in which it
-    /// was observed in the always-hidden section.
-    private var lastMisplacedFrames = [MenuBarItemInfo: CGRect]()
+    /// The position of each item, relative to the always-hidden control item,
+    /// during the most recent cache pass in which it was observed in the
+    /// always-hidden section.
+    ///
+    /// Positions are measured relative to the control item so that items are
+    /// not treated as unstable when another item's width changes and shifts
+    /// the entire menu bar.
+    private var lastMisplacedOffsets = [MenuBarItemInfo: CGFloat]()
 
     /// Event type mask for tracking mouse events.
     private let mouseTrackingMask: NSEvent.EventTypeMask = [
@@ -506,7 +511,8 @@ extension MenuBarItemManager {
 
         let misplacedItems = reconcileSavedItemLayout(
             previousWindowIDs: previousWindowIDs,
-            newCache: itemCache
+            newCache: itemCache,
+            anchorX: (alwaysHiddenControlItem ?? hiddenControlItem).frame.minX
         )
 
         cachedItemSignature = signature
@@ -565,7 +571,8 @@ extension MenuBarItemManager {
     /// - Returns: The items to return to their saved locations.
     private func reconcileSavedItemLayout(
         previousWindowIDs: Set<CGWindowID>,
-        newCache: ItemCache
+        newCache: ItemCache,
+        anchorX: CGFloat
     ) -> [MenuBarItem] {
         func isTempShown(_ item: MenuBarItem) -> Bool {
             tempShownItemContexts.contains { context in
@@ -633,15 +640,15 @@ extension MenuBarItemManager {
                     // Require a stable position across multiple passes, so that
                     // an item that is passing through the section while the menu
                     // bar settles is not moved.
-                    let previousFrame = lastMisplacedFrames[info]
-                    let isStable = previousFrame.map { previous in
-                        abs(previous.minX - item.frame.minX) <= 1
+                    let offset = item.frame.minX - anchorX
+                    let isStable = lastMisplacedOffsets[info].map { previous in
+                        abs(previous - offset) <= 1
                     } ?? false
                     let passCount = isStable
                         ? (misplacedPassCounts[info] ?? 0) + 1
                         : 1
                     misplacedPassCounts[info] = passCount
-                    lastMisplacedFrames[info] = item.frame
+                    lastMisplacedOffsets[info] = offset
                     if passCount >= Self.rescueDebouncePasses {
                         misplacedItems.append(item)
                     }
@@ -649,7 +656,7 @@ extension MenuBarItemManager {
                     rescueAttemptCounts[info] = nil
                     lastRescueDates[info] = nil
                     misplacedPassCounts[info] = nil
-                    lastMisplacedFrames[info] = nil
+                    lastMisplacedOffsets[info] = nil
                 }
 
                 locations.append(SavedItemLocation(info: info, section: sectionForLocation))
