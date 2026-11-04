@@ -464,8 +464,16 @@ extension MenuBarItemManager {
         let itemWindowIDs = Bridging.getWindowList(option: [.menuBarItems, .activeSpace])
         let signature = ItemSignature(windowIDs: itemWindowIDs)
         if signature == cachedItemSignature {
-            logSkippingCache(reason: "menu bar items have not changed")
-            return
+            guard !misplacedPassCounts.isEmpty else {
+                logSkippingCache(reason: "menu bar items have not changed")
+                return
+            }
+            // A misplaced item is still waiting on a second pass before it can
+            // be rescued. Those passes only happen while the cache is being
+            // rebuilt, so keep rebuilding even though the menu bar itself has
+            // not changed. Without this, an item that is moved to the wrong
+            // section at login or wake stays there until the menu bar changes.
+            Logger.itemManager.debug("Menu bar items have not changed, but an item is awaiting rescue")
         }
 
         let previousWindowIDs = knownItemWindowIDs
