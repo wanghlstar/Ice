@@ -680,7 +680,7 @@ extension MenuBarItemManager {
                     isMisplaced,
                     item.isMovable,
                     !isTempShown(item),
-                    (hasSavedItemLayout || savedSection == nil)
+                    hasSavedItemLayout || savedSection == nil
                 {
                     let passCount: Int
                     if isPinnedItem {
