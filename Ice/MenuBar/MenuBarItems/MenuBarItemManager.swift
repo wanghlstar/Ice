@@ -618,10 +618,11 @@ extension MenuBarItemManager {
                 // instead of leaving it there until the namespace resolves.
                 // Its location is recorded provisionally and is updated once
                 // the namespace resolves.
+                let isProvisionalNewItem = section == .alwaysHidden && item.isMovable
                 guard
                     item.info.namespace.optional != nil ||
                     previouslySavedInfo != nil ||
-                    (section == .alwaysHidden && item.isMovable)
+                    isProvisionalNewItem
                 else {
                     continue
                 }
