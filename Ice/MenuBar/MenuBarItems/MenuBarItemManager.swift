@@ -611,17 +611,19 @@ extension MenuBarItemManager {
                 // Without a namespace, the item can't be identified reliably,
                 // so leave its saved location alone until the namespace can be
                 // resolved again. This happens while an app is restarting.
-                guard item.info.namespace.optional != nil || previouslySavedInfo != nil else {
-                    // A brand-new item may not have a resolved namespace yet.
-                    // It can still be moved out of the always-hidden section,
-                    // where the system places new items, so treat it as a new
-                    // item instead of leaving it there until the namespace is
-                    // resolved. The location is recorded provisionally and is
-                    // updated once the namespace resolves.
-                    guard section == .alwaysHidden, item.isMovable else {
-                        continue
-                    }
-                    // Fall through to the new-item handling below.
+                //
+                // A brand-new item may not have a resolved namespace yet. It
+                // can still be moved out of the always-hidden section, where
+                // the system places new items, so treat it as a new item
+                // instead of leaving it there until the namespace resolves.
+                // Its location is recorded provisionally and is updated once
+                // the namespace resolves.
+                guard
+                    item.info.namespace.optional != nil ||
+                    previouslySavedInfo != nil ||
+                    (section == .alwaysHidden && item.isMovable)
+                else {
+                    continue
                 }
 
                 let info = item.info.namespace.optional != nil
