@@ -31,6 +31,7 @@ struct AdvancedSettingsPane: View {
             IceSection {
                 hideApplicationMenus
                 showSectionDividers
+                sectionDividerStyle
                 showAllSectionsOnUserDrag
                 showContextMenuOnRightClick
             }
@@ -60,7 +61,7 @@ struct AdvancedSettingsPane: View {
             .annotation {
                 HStack(spacing: 2) {
                     Text("Insert divider items")
-                    if let nsImage = ControlItemImage.builtin(.chevronLarge).nsImage(for: appState) {
+                    if let nsImage = dividerPreviewImage {
                         HStack(spacing: 0) {
                             Text("(")
                                 .font(.body.monospaced().bold())
@@ -73,6 +74,28 @@ struct AdvancedSettingsPane: View {
                     Text("between sections")
                 }
             }
+    }
+
+    @ViewBuilder
+    private var sectionDividerStyle: some View {
+        if manager.showSectionDividers {
+            Picker("Section divider style", selection: manager.bindings.sectionDividerStyle) {
+                Text("Chevron")
+                    .tag(SectionDividerStyle.chevron)
+                Text("Vertical bar")
+                    .tag(SectionDividerStyle.bar)
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private var dividerPreviewImage: NSImage? {
+        switch manager.sectionDividerStyle {
+        case .chevron:
+            ControlItemImage.builtin(.chevronLarge).nsImage(for: appState)
+        case .bar:
+            ControlItemImage.builtin(.verticalBar).nsImage(for: appState)
+        }
     }
 
     @ViewBuilder

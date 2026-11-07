@@ -24,6 +24,7 @@ enum ControlItemImage: Codable, Hashable {
             return switch name {
             case .chevronLarge: StaticBuiltins.Chevron.large
             case .chevronSmall: StaticBuiltins.Chevron.small
+            case .verticalBar: StaticBuiltins.VerticalBar.image
             }
         case .symbol(let name):
             let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
@@ -54,6 +55,8 @@ extension ControlItemImage {
         case chevronLarge
         /// A small chevron.
         case chevronSmall
+        /// A vertical bar.
+        case verticalBar
     }
 }
 
@@ -88,6 +91,21 @@ extension ControlItemImage {
 
             /// A small chevron.
             static let small = chevron(size: CGSize(width: 9, height: 9), lineWidth: 2)
+        }
+
+        /// A namespace for the static vertical bar image.
+        enum VerticalBar {
+            /// A vertical bar.
+            static let image: NSImage = {
+                let image = NSImage(size: CGSize(width: 2, height: 14), flipped: false) { bounds in
+                    let path = NSBezierPath(roundedRect: bounds, xRadius: 1, yRadius: 1)
+                    NSColor.black.setFill()
+                    path.fill()
+                    return true
+                }
+                image.isTemplate = true
+                return image
+            }()
         }
     }
 }

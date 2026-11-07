@@ -160,6 +160,7 @@ extension Defaults {
 
         case hideApplicationMenus = "HideApplicationMenus"
         case showSectionDividers = "ShowSectionDividers"
+        case sectionDividerStyle = "SectionDividerStyle"
         case enableAlwaysHiddenSection = "EnableAlwaysHiddenSection"
         case canToggleAlwaysHiddenSection = "CanToggleAlwaysHiddenSection"
         case showOnHoverDelay = "ShowOnHoverDelay"

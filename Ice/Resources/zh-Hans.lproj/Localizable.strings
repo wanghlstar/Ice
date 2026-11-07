@@ -186,3 +186,8 @@
 "Pin to Leftmost" = "固定到可见区最左端";
 "Unpin from Leftmost" = "取消固定最左";
 "Right-click an item to keep it at the leftmost position of the Visible section" = "右键点击图标可将其固定在可见区最左端";
+
+/* 分隔条样式 */
+"Section divider style" = "分隔条样式";
+"Chevron" = "箭头";
+"Vertical bar" = "竖线";

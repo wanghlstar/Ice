@@ -295,6 +295,16 @@ final class ControlItem {
                 }
                 .store(in: &c)
 
+            appState.settingsManager.advancedSettingsManager.$sectionDividerStyle
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    guard let self else {
+                        return
+                    }
+                    updateStatusItem(with: state)
+                }
+                .store(in: &c)
+
             appState.settingsManager.advancedSettingsManager.$enableAlwaysHiddenSection
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] enable in
@@ -377,12 +387,28 @@ final class ControlItem {
                 // Set the image based on the section name and the hiding state.
                 switch section.name {
                 case .hidden:
-                    button.image = ControlItemImage.builtin(.chevronLarge).nsImage(for: appState)
+                    button.image = dividerImage(isLarge: true)
                 case .alwaysHidden:
-                    button.image = ControlItemImage.builtin(.chevronSmall).nsImage(for: appState)
+                    button.image = dividerImage(isLarge: false)
                 case .visible: break
                 }
             }
+        }
+    }
+
+    /// Returns the image to display for the section divider.
+    ///
+    /// - Parameter isLarge: Whether the divider belongs to the hidden section.
+    private func dividerImage(isLarge: Bool) -> NSImage? {
+        guard let appState else {
+            return nil
+        }
+        switch appState.settingsManager.advancedSettingsManager.sectionDividerStyle {
+        case .chevron:
+            let name: ControlItemImage.ImageBuiltinName = isLarge ? .chevronLarge : .chevronSmall
+            return ControlItemImage.builtin(name).nsImage(for: appState)
+        case .bar:
+            return ControlItemImage.builtin(.verticalBar).nsImage(for: appState)
         }
     }
 

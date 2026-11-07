@@ -6,6 +6,16 @@
 import Combine
 import Foundation
 
+/// The appearance of the section divider control items.
+enum SectionDividerStyle: String, CaseIterable, Identifiable {
+    /// A chevron that points toward the section it controls.
+    case chevron
+    /// A vertical bar.
+    case bar
+
+    var id: String { rawValue }
+}
+
 @MainActor
 final class AdvancedSettingsManager: ObservableObject {
     /// A Boolean value that indicates whether the application menus
@@ -15,6 +25,9 @@ final class AdvancedSettingsManager: ObservableObject {
     /// A Boolean value that indicates whether section divider control
     /// items should be shown.
     @Published var showSectionDividers = false
+
+    /// The appearance of the section divider control items.
+    @Published var sectionDividerStyle = SectionDividerStyle.chevron
 
     /// A Boolean value that indicates whether the always-hidden section
     /// is enabled.
@@ -54,6 +67,12 @@ final class AdvancedSettingsManager: ObservableObject {
     private func loadInitialState() {
         Defaults.ifPresent(key: .hideApplicationMenus, assign: &hideApplicationMenus)
         Defaults.ifPresent(key: .showSectionDividers, assign: &showSectionDividers)
+        if
+            let rawValue = Defaults.string(forKey: .sectionDividerStyle),
+            let style = SectionDividerStyle(rawValue: rawValue)
+        {
+            sectionDividerStyle = style
+        }
         Defaults.ifPresent(key: .enableAlwaysHiddenSection, assign: &enableAlwaysHiddenSection)
         Defaults.ifPresent(key: .canToggleAlwaysHiddenSection, assign: &canToggleAlwaysHiddenSection)
         Defaults.ifPresent(key: .showOnHoverDelay, assign: &showOnHoverDelay)
@@ -76,6 +95,13 @@ final class AdvancedSettingsManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { shouldShow in
                 Defaults.set(shouldShow, forKey: .showSectionDividers)
+            }
+            .store(in: &c)
+
+        $sectionDividerStyle
+            .receive(on: DispatchQueue.main)
+            .sink { style in
+                Defaults.set(style.rawValue, forKey: .sectionDividerStyle)
             }
             .store(in: &c)
 
