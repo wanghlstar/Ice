@@ -591,9 +591,15 @@ extension MenuBarItemManager {
         var locations = [SavedItemLocation]()
         var misplacedItems = [MenuBarItem]()
         var savedInfos = Set<MenuBarItemInfo>()
+        var pinnedInfoForSave = savedItemLayout.pinnedInfo
         // The window identifiers are only known after a cache pass, so the
         // first pass after launch sees every item as newly created.
         let isFirstPass = previousWindowIDs.isEmpty
+
+        // The item that currently occupies the leading edge of the visible
+        // section. Temporarily shown items are excluded, as they are cached
+        // as if they were still in their original locations.
+        let leftmostVisibleInfo = newCache[.visible].first { !isTempShown($0) }?.info
 
         for section in MenuBarSection.Name.menuBarOrder {
             for item in newCache[section] {
@@ -606,7 +612,16 @@ extension MenuBarItemManager {
                 // so leave its saved location alone until the namespace can be
                 // resolved again. This happens while an app is restarting.
                 guard item.info.namespace.optional != nil || previouslySavedInfo != nil else {
-                    continue
+                    // A brand-new item may not have a resolved namespace yet.
+                    // It can still be moved out of the always-hidden section,
+                    // where the system places new items, so treat it as a new
+                    // item instead of leaving it there until the namespace is
+                    // resolved. The location is recorded provisionally and is
+                    // updated once the namespace resolves.
+                    guard section == .alwaysHidden, item.isMovable else {
+                        continue
+                    }
+                    // Fall through to the new-item handling below.
                 }
 
                 let info = item.info.namespace.optional != nil
@@ -621,6 +636,12 @@ extension MenuBarItemManager {
                 }
 
                 let savedSection = savedItemLayout.section(for: item.info)
+                let isPinnedItem = savedItemLayout.isPinned(item.info)
+                if isPinnedItem, info.namespace.optional != nil {
+                    // Keep the pinned item's saved info in step with its
+                    // resolved namespace.
+                    pinnedInfoForSave = info
+                }
                 var sectionForLocation = section
 
                 // An item that the system created again can appear in a
@@ -639,24 +660,47 @@ extension MenuBarItemManager {
                 sectionForLocation = resolution.section
                 isMisplaced = resolution.isMisplaced
 
+                if isPinnedItem, item.isMovable {
+                    // A pinned item always belongs to the visible section, and
+                    // is only in place when it is that section's leading item.
+                    sectionForLocation = .visible
+                    if section != .visible {
+                        isMisplaced = true
+                    } else if let leftmostVisibleInfo {
+                        isMisplaced = !MenuBarItemLayout.isMatchingInfo(leftmostVisibleInfo, info)
+                    } else {
+                        isMisplaced = false
+                    }
+                }
+
                 if
                     isMisplaced,
-                    hasSavedItemLayout,
                     item.isMovable,
-                    !isTempShown(item)
+                    !isTempShown(item),
+                    (hasSavedItemLayout || savedSection == nil)
                 {
-                    // Require a stable position across multiple passes, so that
-                    // an item that is passing through the section while the menu
-                    // bar settles is not moved.
-                    let offset = item.frame.minX - anchorX
-                    let isStable = lastMisplacedOffsets[info].map { previous in
-                        abs(previous - offset) <= 1
-                    } ?? false
-                    let passCount = isStable
-                        ? (misplacedPassCounts[info] ?? 0) + 1
-                        : 1
-                    misplacedPassCounts[info] = passCount
-                    lastMisplacedOffsets[info] = offset
+                    let passCount: Int
+                    if isPinnedItem {
+                        // The user explicitly asked for this placement, so move
+                        // the item without waiting for its position to
+                        // stabilize across multiple passes.
+                        passCount = Self.rescueDebouncePasses
+                        misplacedPassCounts[info] = passCount
+                        lastMisplacedOffsets[info] = item.frame.minX - anchorX
+                    } else {
+                        // Require a stable position across multiple passes, so
+                        // that an item that is passing through the section while
+                        // the menu bar settles is not moved.
+                        let offset = item.frame.minX - anchorX
+                        let isStable = lastMisplacedOffsets[info].map { previous in
+                            abs(previous - offset) <= 1
+                        } ?? false
+                        passCount = isStable
+                            ? (misplacedPassCounts[info] ?? 0) + 1
+                            : 1
+                        misplacedPassCounts[info] = passCount
+                        lastMisplacedOffsets[info] = offset
+                    }
                     if passCount >= Self.rescueDebouncePasses {
                         misplacedItems.append(item)
                     }
@@ -690,13 +734,75 @@ extension MenuBarItemManager {
             locations.removeLast(locations.count - MenuBarItemLayout.maximumLocationCount)
         }
 
-        if locations != savedItemLayout.locations {
-            savedItemLayout = MenuBarItemLayout(locations: locations)
+        if locations != savedItemLayout.locations || pinnedInfoForSave != savedItemLayout.pinnedInfo {
+            savedItemLayout = MenuBarItemLayout(
+                locations: locations,
+                pinnedInfo: pinnedInfoForSave
+            )
             savedItemLayout.save()
         }
         hasSavedItemLayout = true
 
         return misplacedItems
+    }
+}
+
+// MARK: - Pinning
+
+extension MenuBarItemManager {
+    /// Returns a Boolean value that indicates whether the given item is pinned
+    /// to the leading edge of the visible section.
+    ///
+    /// - Parameter info: The info of the item to check.
+    func isPinnedToVisibleLeading(_ info: MenuBarItemInfo) -> Bool {
+        savedItemLayout.isPinned(info)
+    }
+
+    /// Pins or unpins the given item at the leading edge of the visible
+    /// section.
+    ///
+    /// Only one item can be pinned at a time. Pinning an item unpins the
+    /// previously pinned item. The item is moved into place on the next cache
+    /// pass.
+    ///
+    /// - Parameters:
+    ///   - pinned: Whether the item should be pinned.
+    ///   - item: The item to pin or unpin.
+    func setPinnedToVisibleLeading(_ pinned: Bool, for item: MenuBarItem) {
+        let key = savedItemLayout.location(for: item.info)?.info ?? item.info
+        var locations = savedItemLayout.locations
+        if let index = locations.firstIndex(where: { $0.info == key }) {
+            if pinned {
+                locations[index].section = .visible
+            }
+        } else if pinned {
+            locations.append(SavedItemLocation(info: key, section: .visible))
+        }
+
+        let pinnedInfo: MenuBarItemInfo? = if pinned {
+            key
+        } else if savedItemLayout.isPinned(item.info) {
+            nil
+        } else {
+            savedItemLayout.pinnedInfo
+        }
+
+        savedItemLayout = MenuBarItemLayout(locations: locations, pinnedInfo: pinnedInfo)
+        savedItemLayout.save()
+        hasSavedItemLayout = true
+
+        if pinned {
+            rescueAttemptCounts[key] = nil
+            lastRescueDates[key] = nil
+            misplacedPassCounts[key] = nil
+            lastMisplacedOffsets[key] = nil
+        }
+
+        // Rebuild the cache so that the pin takes effect immediately.
+        cachedItemSignature = nil
+        Task {
+            await cacheItemsIfNeeded()
+        }
     }
 }
 
@@ -820,7 +926,10 @@ extension MenuBarItemManager {
             !(location.info.namespace.optional == nil && location.info.title == info.title)
         }
         locations.append(SavedItemLocation(info: info, section: section))
-        savedItemLayout = MenuBarItemLayout(locations: locations)
+        savedItemLayout = MenuBarItemLayout(
+            locations: locations,
+            pinnedInfo: savedItemLayout.pinnedInfo
+        )
         savedItemLayout.save()
         hasSavedItemLayout = true
         rescueAttemptCounts[info] = nil
@@ -860,7 +969,10 @@ extension MenuBarItemManager {
         guard changed else {
             return
         }
-        savedItemLayout = MenuBarItemLayout(locations: locations)
+        savedItemLayout = MenuBarItemLayout(
+            locations: locations,
+            pinnedInfo: savedItemLayout.pinnedInfo
+        )
         savedItemLayout.save()
         hasSavedItemLayout = true
         Logger.itemManager.notice("Recorded user placement of section dividers")

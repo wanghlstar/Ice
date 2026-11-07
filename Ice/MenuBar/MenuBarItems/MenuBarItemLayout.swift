@@ -11,7 +11,7 @@ struct SavedItemLocation: Codable, Hashable {
     let info: MenuBarItemInfo
 
     /// The section that the item belongs to.
-    let section: MenuBarSection.Name
+    var section: MenuBarSection.Name
 }
 
 /// The saved layout of the menu bar items.
@@ -39,13 +39,24 @@ struct MenuBarItemLayout: Codable, Hashable {
     /// The saved locations, ordered by position in the menu bar.
     var locations: [SavedItemLocation]
 
+    /// The item that is pinned to the leading edge of the visible section.
+    ///
+    /// Only one item can be pinned at a time. A pinned item is always kept in
+    /// the visible section and is returned to the leftmost position in that
+    /// section when something else moves it.
+    var pinnedInfo: MenuBarItemInfo?
+
     /// Creates a saved layout with the given locations.
     ///
-    /// - Parameter locations: The locations to save, ordered by position
-    ///   in the menu bar.
-    init(locations: [SavedItemLocation]) {
+    /// - Parameters:
+    ///   - locations: The locations to save, ordered by position in the menu
+    ///     bar.
+    ///   - pinnedInfo: The item that is pinned to the leading edge of the
+    ///     visible section.
+    init(locations: [SavedItemLocation], pinnedInfo: MenuBarItemInfo? = nil) {
         self.version = Self.currentVersion
         self.locations = locations
+        self.pinnedInfo = pinnedInfo
     }
 
     /// Creates an empty saved layout.
@@ -57,6 +68,7 @@ struct MenuBarItemLayout: Codable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case version
         case locations
+        case pinnedInfo
     }
 
     /// Creates a saved layout from the given decoder.
@@ -66,6 +78,18 @@ struct MenuBarItemLayout: Codable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
         self.locations = try container.decode([SavedItemLocation].self, forKey: .locations)
+        self.pinnedInfo = try container.decodeIfPresent(MenuBarItemInfo.self, forKey: .pinnedInfo)
+    }
+
+    /// Returns a Boolean value that indicates whether the given item is
+    /// pinned to the leading edge of the visible section.
+    ///
+    /// - Parameter info: The info of the item to check.
+    func isPinned(_ info: MenuBarItemInfo) -> Bool {
+        guard let pinnedInfo else {
+            return false
+        }
+        return Self.isMatchingInfo(pinnedInfo, info)
     }
 
     /// Loads the saved layout from user defaults.
@@ -167,8 +191,14 @@ struct MenuBarItemLayout: Codable, Hashable {
         isFirstPass: Bool,
         isMovable: Bool
     ) -> (section: MenuBarSection.Name, isMisplaced: Bool) {
-        // Ice can't move the item, so record where it actually is.
+        // Ice can't move the item, so record where it actually is. A new item
+        // that the system placed in the always-hidden section still defaults to
+        // the hidden section, so that it is returned there once it becomes
+        // movable.
         guard isMovable else {
+            if observed == .alwaysHidden {
+                return (saved ?? .hidden, false)
+            }
             return (observed, false)
         }
         if observed == .alwaysHidden {
@@ -230,6 +260,11 @@ extension MenuBarItemLayout {
         hiddenControlItem: MenuBarItem,
         alwaysHiddenControlItem: MenuBarItem?
     ) -> MenuBarItemManager.MoveDestination? {
+        if isPinned(item.info) {
+            // A pinned item is always the leftmost item of the visible
+            // section, immediately to the right of the hidden control item.
+            return .rightOfItem(hiddenControlItem)
+        }
         guard
             let location = location(for: item.info),
             let index = locations.firstIndex(of: location)
@@ -310,7 +345,7 @@ extension MenuBarItemLayout {
         guard neighbor.section == section else {
             return nil
         }
-        guard let item = cache[section].first(where: { isMatchingInfo($0.info, neighbor.info) }) else {
+        guard let item = cache[section].first(where: { Self.isMatchingInfo($0.info, neighbor.info) }) else {
             // The neighbor is no longer in the menu bar.
             return nil
         }
@@ -323,7 +358,7 @@ extension MenuBarItemLayout {
     /// - Parameters:
     ///   - lhs: The first info to compare.
     ///   - rhs: The second info to compare.
-    private func isMatchingInfo(_ lhs: MenuBarItemInfo, _ rhs: MenuBarItemInfo) -> Bool {
+    static func isMatchingInfo(_ lhs: MenuBarItemInfo, _ rhs: MenuBarItemInfo) -> Bool {
         if lhs == rhs {
             return true
         }

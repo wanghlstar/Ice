@@ -106,6 +106,36 @@ final class LayoutBarItemView: NSView {
         cancellables = c
     }
 
+    /// Provides the context menu for the item view.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let appState else {
+            return nil
+        }
+        let isPinned = appState.itemManager.isPinnedToVisibleLeading(item.info)
+        let title = isPinned
+            ? NSLocalizedString("Unpin from Leftmost", comment: "Menu bar layout item context menu")
+            : NSLocalizedString("Pin to Leftmost", comment: "Menu bar layout item context menu")
+        let menuItem = NSMenuItem(
+            title: title,
+            action: #selector(togglePinnedToVisibleLeading),
+            keyEquivalent: ""
+        )
+        menuItem.target = self
+        menuItem.state = isPinned ? .on : .off
+        menuItem.isEnabled = isPinned || item.isMovable
+        let menu = NSMenu()
+        menu.addItem(menuItem)
+        return menu
+    }
+
+    @objc private func togglePinnedToVisibleLeading() {
+        guard let appState else {
+            return
+        }
+        let isPinned = appState.itemManager.isPinnedToVisibleLeading(item.info)
+        appState.itemManager.setPinnedToVisibleLeading(!isPinned, for: item)
+    }
+
     /// Provides an alert to display when the item view is disabled.
     func provideAlertForDisabledItem() -> NSAlert {
         let alert = NSAlert()

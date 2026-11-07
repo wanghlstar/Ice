@@ -181,3 +181,8 @@
 "Arrange menu bar items." = "排列菜单栏项目";
 "Edit the menu bar's appearance." = "编辑菜单栏外观";
 "Display images of individual menu bar items." = "显示各个菜单栏项目的图像";
+
+/* 固定到可见区最左端 */
+"Pin to Leftmost" = "固定到可见区最左端";
+"Unpin from Leftmost" = "取消固定最左";
+"Right-click an item to keep it at the leftmost position of the Visible section" = "右键点击图标可将其固定在可见区最左端";

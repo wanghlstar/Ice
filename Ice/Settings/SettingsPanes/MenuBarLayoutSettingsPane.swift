@@ -38,6 +38,10 @@ struct MenuBarLayoutSettingsPane: View {
                 }
             }
         }
+
+        Text("Right-click an item to keep it at the leftmost position of the Visible section")
+            .font(.callout)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
