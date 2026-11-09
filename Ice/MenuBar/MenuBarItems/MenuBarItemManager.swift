@@ -198,6 +198,23 @@ final class MenuBarItemManager: ObservableObject {
     /// the entire menu bar.
     private var lastMisplacedOffsets = [MenuBarItemInfo: CGFloat]()
 
+    /// The date at which the initial restoration window ends.
+    ///
+    /// While this window is open, misplaced items are restored in larger
+    /// batches with shorter cooldowns, and cache passes are scheduled as soon
+    /// as an item is moved. This makes the menu bar converge quickly after
+    /// login, wake, and display changes, when macOS creates every status item
+    /// again and place them in the wrong sections.
+    private var initialRestoreDeadline = Date.now
+
+    /// A task that schedules a follow-up cache pass during the initial
+    /// restoration window.
+    private var followUpCachePassTask: Task<Void, Never>?
+
+    /// A Boolean value that indicates whether a cache pass is currently
+    /// running.
+    private var isCachingItems = false
+
     /// Event type mask for tracking mouse events.
     private let mouseTrackingMask: NSEvent.EventTypeMask = [
         .mouseMoved,
@@ -209,8 +226,24 @@ final class MenuBarItemManager: ObservableObject {
         .otherMouseUp,
     ]
 
-    /// The maximum number of items to rescue per cache.
+    /// The maximum number of items to rescue per cache during normal
+    /// operation.
     private static let maxRescueCount = 3
+
+    /// The maximum number of items to rescue per cache during the initial
+    /// restoration window.
+    private static let initialMaxRescueCount = 64
+
+    /// The cooldown between rescue attempts during the initial restoration
+    /// window.
+    private static let initialRescueCooldown: TimeInterval = 2
+
+    /// The amount of time that the initial restoration window stays open.
+    private static let initialRestoreWindow: TimeInterval = 120
+
+    /// The delay before a follow-up cache pass during the initial restoration
+    /// window.
+    private static let followUpCachePassDelay: Duration = .milliseconds(300)
 
     /// The number of failed rescue attempts after which the time between
     /// attempts is increased. The item is never recorded as always-hidden, so
@@ -263,6 +296,7 @@ final class MenuBarItemManager: ObservableObject {
         let layout = MenuBarItemLayout.load()
         self.savedItemLayout = layout ?? MenuBarItemLayout()
         self.hasSavedItemLayout = layout != nil
+        self.initialRestoreDeadline = .now.addingTimeInterval(Self.initialRestoreWindow)
     }
 
     /// Sets up the manager.
@@ -309,6 +343,13 @@ final class MenuBarItemManager: ObservableObject {
                 return
             }
             Task {
+                // A wake or display change can create the status items again,
+                // so run a fresh, fast restoration window.
+                self.beginInitialRestoreWindow()
+                self.rescueAttemptCounts.removeAll()
+                self.lastRescueDates.removeAll()
+                self.misplacedPassCounts.removeAll()
+                self.lastMisplacedOffsets.removeAll()
                 // Give the system a moment to settle the new menu bar layout.
                 try? await Task.sleep(for: .milliseconds(500))
                 // Reset the signature, as the menu bar layout has changed.
@@ -449,14 +490,25 @@ extension MenuBarItemManager {
     /// Caches the current menu bar items if needed, ensuring that the control
     /// items are in the correct order.
     func cacheItemsIfNeeded() async {
+        guard !isCachingItems else {
+            scheduleFollowUpCachePass(after: .milliseconds(200))
+            return
+        }
+        isCachingItems = true
+        defer {
+            isCachingItems = false
+        }
+
         do {
             try await waitForItemsToStopMoving(timeout: .seconds(1))
         } catch is TaskTimeoutError {
             logSkippingCache(reason: "an item is currently being moved")
+            scheduleFollowUpCachePass(after: .seconds(1))
             return
         } catch {
             guard !itemHasRecentlyMoved else {
                 logSkippingCache(reason: "an item was recently moved")
+                scheduleFollowUpCachePass(after: .seconds(1))
                 return
             }
         }
@@ -491,6 +543,7 @@ extension MenuBarItemManager {
             // Reset the signature, as the cache could not be updated. Without
             // this, the cache would stay empty until the menu bar items change.
             cachedItemSignature = nil
+            scheduleFollowUpCachePass(after: .seconds(1))
             return
         }
 
@@ -514,6 +567,7 @@ extension MenuBarItemManager {
             // Reset the signature, as the cache could not be updated. Without
             // this, the cache would stay empty until the menu bar items change.
             cachedItemSignature = nil
+            scheduleFollowUpCachePass(after: .seconds(1))
             return
         }
 
@@ -531,6 +585,14 @@ extension MenuBarItemManager {
             hiddenControlItem: hiddenControlItem,
             alwaysHiddenControlItem: alwaysHiddenControlItem
         )
+
+        if isInitialRestorePhase {
+            let isAwaitingDebounce = misplacedPassCounts.values.contains { $0 < Self.rescueDebouncePasses }
+            let hasAttemptableItem = misplacedItems.contains { canAttemptRescue(of: $0) }
+            if isAwaitingDebounce || hasAttemptableItem {
+                scheduleFollowUpCachePass()
+            }
+        }
     }
 }
 
@@ -1061,6 +1123,35 @@ extension MenuBarItemManager {
 // MARK: - Rescue Items
 
 extension MenuBarItemManager {
+    /// A Boolean value that indicates whether the initial restoration window
+    /// is still open.
+    fileprivate var isInitialRestorePhase: Bool {
+        Date.now < initialRestoreDeadline
+    }
+
+    /// Opens a new initial restoration window.
+    fileprivate func beginInitialRestoreWindow() {
+        initialRestoreDeadline = Date.now.addingTimeInterval(Self.initialRestoreWindow)
+    }
+
+    /// Schedules a follow-up cache pass during the initial restoration window.
+    ///
+    /// - Parameter delay: The amount of time to wait before rebuilding the
+    ///   cache. A previous follow-up pass is cancelled.
+    fileprivate func scheduleFollowUpCachePass(after delay: Duration = Self.followUpCachePassDelay) {
+        guard isInitialRestorePhase else {
+            return
+        }
+        followUpCachePassTask?.cancel()
+        followUpCachePassTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else {
+                return
+            }
+            await self.cacheItemsIfNeeded()
+        }
+    }
+
     /// A Boolean value that indicates whether misplaced items can currently
     /// be returned to their saved locations.
     private var canMoveMisplacedItems: Bool {
@@ -1111,9 +1202,16 @@ extension MenuBarItemManager {
             return true
         }
         let attempts = rescueAttemptCounts[key] ?? 0
-        let cooldown = attempts >= Self.maxRescueAttempts
-            ? Self.abandonedRescueCooldown
-            : Self.rescueCooldown
+        let cooldown: TimeInterval
+        if attempts >= Self.maxRescueAttempts {
+            cooldown = Self.abandonedRescueCooldown
+        } else if isInitialRestorePhase {
+            // Converge quickly after login, wake, and display changes without
+            // hammering an item that keeps failing.
+            cooldown = Self.initialRescueCooldown
+        } else {
+            cooldown = Self.rescueCooldown
+        }
         return Date.now.timeIntervalSince(lastRescueDate) >= cooldown
     }
 
@@ -1176,6 +1274,7 @@ extension MenuBarItemManager {
         alwaysHiddenControlItem: MenuBarItem?
     ) async {
         guard canStartRescue else {
+            scheduleFollowUpCachePass(after: .seconds(1))
             return
         }
         isRescuingItems = true
@@ -1185,11 +1284,32 @@ extension MenuBarItemManager {
             rescueStartDate = nil
         }
 
-        for item in items.prefix(Self.maxRescueCount) {
+        // Restore the pinned item first, followed by the visible section, so
+        // that the item the user cares about is in place as soon as possible.
+        let sortedItems = items.sorted { lhs, rhs in
+            let lhsPriority = rescuePriority(of: lhs)
+            let rhsPriority = rescuePriority(of: rhs)
+            if lhsPriority != rhsPriority {
+                return lhsPriority < rhsPriority
+            }
+            return lhs.frame.minX < rhs.frame.minX
+        }
+
+        let limit = isInitialRestorePhase ? Self.initialMaxRescueCount : Self.maxRescueCount
+        var attemptedCount = 0
+        var didAttempt = false
+
+        for item in sortedItems {
+            guard attemptedCount < limit else {
+                break
+            }
             guard canMoveMisplacedItems else {
                 Logger.itemManager.debug("Not rescuing \(item.logString), as an item may be in use")
+                scheduleFollowUpCachePass(after: .seconds(1))
                 return
             }
+            // Skip items that are cooling down without consuming the batch
+            // budget, so that a stuck item cannot starve the items behind it.
             guard canAttemptRescue(of: item) else {
                 continue
             }
@@ -1208,6 +1328,9 @@ extension MenuBarItemManager {
                     continue
                 }
             }
+
+            attemptedCount += 1
+            didAttempt = true
 
             Logger.itemManager.notice("Returning \(item.logString) to \(destination.logString)")
 
@@ -1228,6 +1351,28 @@ extension MenuBarItemManager {
                 cachedItemSignature = nil
                 Logger.itemManager.error("Failed to return \(item.logString) (error: \(error))")
             }
+        }
+
+        if isInitialRestorePhase, didAttempt, !items.isEmpty {
+            scheduleFollowUpCachePass()
+        }
+    }
+
+    /// Returns the order in which the given item should be rescued.
+    ///
+    /// A lower value is rescued first. Pinned items come first, followed by
+    /// items in the visible, hidden, and always-hidden sections.
+    ///
+    /// - Parameter item: The item to return the priority for.
+    private func rescuePriority(of item: MenuBarItem) -> Int {
+        if savedItemLayout.isPinned(item.info) {
+            return 0
+        }
+        return switch itemCache.section(for: item) {
+        case .visible: 1
+        case .hidden: 2
+        case .alwaysHidden: 3
+        case nil: 4
         }
     }
 }
