@@ -241,10 +241,6 @@ final class MenuBarItemManager: ObservableObject {
     /// The amount of time that the initial restoration window stays open.
     private static let initialRestoreWindow: TimeInterval = 120
 
-    /// The delay before a follow-up cache pass during the initial restoration
-    /// window.
-    private static let followUpCachePassDelay: Duration = .milliseconds(300)
-
     /// The number of failed rescue attempts after which the time between
     /// attempts is increased. The item is never recorded as always-hidden, so
     /// it is still rescued if it becomes movable later.
@@ -1138,7 +1134,7 @@ extension MenuBarItemManager {
     ///
     /// - Parameter delay: The amount of time to wait before rebuilding the
     ///   cache. A previous follow-up pass is cancelled.
-    fileprivate func scheduleFollowUpCachePass(after delay: Duration = Self.followUpCachePassDelay) {
+    fileprivate func scheduleFollowUpCachePass(after delay: Duration = .milliseconds(300)) {
         guard isInitialRestorePhase else {
             return
         }
