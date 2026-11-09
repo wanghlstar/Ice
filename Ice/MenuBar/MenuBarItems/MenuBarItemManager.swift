@@ -971,13 +971,48 @@ extension MenuBarItemManager {
             return
         }
 
+        saveUserPlacement(of: item, in: section)
+    }
+
+    /// Records that the user moved the given item into the given section from
+    /// the menu bar layout interface.
+    ///
+    /// This is required for moves into the always-hidden section: the system
+    /// also places new items there, so an unrecorded observation is treated as
+    /// a misplacement and returned to the saved section. Without this, items
+    /// dragged into the always-hidden section would bounce back to the hidden
+    /// section.
+    ///
+    /// - Parameters:
+    ///   - item: The item that the user moved.
+    ///   - section: The section that the user moved the item into.
+    func recordUserPlacement(of item: MenuBarItem, in section: MenuBarSection.Name) {
+        guard saveUserPlacement(of: item, in: section) else {
+            return
+        }
+        // Rebuild the cache so that the item is not immediately returned to
+        // its previous section.
+        cachedItemSignature = nil
+        Task {
+            await cacheItemsIfNeeded()
+        }
+    }
+
+    /// Saves the given user placement and returns whether the saved layout
+    /// changed.
+    ///
+    /// - Parameters:
+    ///   - item: The item that the user moved.
+    ///   - section: The section that the user moved the item into.
+    @discardableResult
+    private func saveUserPlacement(of item: MenuBarItem, in section: MenuBarSection.Name) -> Bool {
         let previouslySavedInfo = savedItemLayout.location(for: item.info)?.info
         let info = item.info.namespace.optional != nil
             ? item.info
             : (previouslySavedInfo ?? item.info)
 
         guard savedItemLayout.section(for: info) != section else {
-            return
+            return false
         }
 
         var locations = savedItemLayout.locations.filter { location in
@@ -995,8 +1030,11 @@ extension MenuBarItemManager {
         hasSavedItemLayout = true
         rescueAttemptCounts[info] = nil
         lastRescueDates[info] = nil
+        misplacedPassCounts[info] = nil
+        lastMisplacedOffsets[info] = nil
 
         Logger.itemManager.notice("Recorded user placement of \(info.description) in section \(section.rawValue)")
+        return true
     }
 
     /// Records the section that each item is currently in, so that moving a
