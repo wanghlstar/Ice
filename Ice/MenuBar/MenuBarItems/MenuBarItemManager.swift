@@ -761,11 +761,17 @@ extension MenuBarItemManager {
             if currentInfos.contains(location.info) {
                 return false
             }
-            // Drop entries that duplicate a recorded item under a different
-            // namespace resolution.
+            // Drop an unresolved entry that duplicates an item recorded under
+            // its resolved namespace. Never drop a resolved entry in favor of
+            // an unresolved one: the resolved entry is the authoritative
+            // record of the user's placement. Keeping it means a temporary
+            // namespace failure cannot erase a saved section.
+            guard location.info.namespace.optional == nil else {
+                return true
+            }
             return !locations.contains { recorded in
                 recorded.info.title == location.info.title &&
-                (recorded.info.namespace.optional == nil || location.info.namespace.optional == nil)
+                recorded.info.namespace.optional != nil
             }
         }
         locations.append(contentsOf: absentLocations)
