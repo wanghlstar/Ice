@@ -170,74 +170,52 @@ struct MenuBarItemLayout: Codable, Hashable {
         location(for: info)?.section
     }
 
-    /// Returns the section to record for an item, and whether the item should
-    /// be returned to its saved section.
+    /// Returns the section to save for an item, and whether the item should be
+    /// returned to that section.
     ///
-    /// Items that keep their window can only change sections when something
-    /// moves them in the menu bar, so the observed section is authoritative.
-    /// Items that are created again, and items that the menu bar layout pushed
-    /// into the always-hidden section, are returned to their saved section.
+    /// The saved section is the single source of truth. It is only changed by
+    /// explicit user actions: dragging an item in the menu bar or the layout
+    /// bar, dragging a section divider, or pinning an item. The observed
+    /// section is never used to rewrite an existing entry, because menu bar
+    /// geometry changes when sections are shown or hidden and when macOS
+    /// inserts or removes items. An item near the always-hidden divider can
+    /// therefore be observed in a different section without the user moving
+    /// it.
+    ///
+    /// Items without a saved section adopt their observed section, except
+    /// that new items in the always-hidden section are moved to the hidden
+    /// section.
     ///
     /// - Parameters:
     ///   - saved: The saved section of the item, if any.
     ///   - observed: The section that currently contains the item.
-    ///   - isNewWindow: Whether the item was created again by its app.
-    ///   - isFirstPass: Whether this is the first cache pass after launch.
     ///   - isMovable: Whether Ice can move the item.
     static func resolveLocation(
         saved: MenuBarSection.Name?,
         observed: MenuBarSection.Name,
-        isNewWindow: Bool,
-        isFirstPass: Bool,
         isMovable: Bool
     ) -> (section: MenuBarSection.Name, isMisplaced: Bool) {
-        // Ice can't move the item, so record where it actually is. A new item
-        // that the system placed in the always-hidden section still defaults to
-        // the hidden section, so that it is returned there once it becomes
-        // movable.
+        if let saved {
+            guard isMovable else {
+                // The item can't be moved, so there is nothing to rescue.
+                // Keep the saved section so that the user's placement is not
+                // lost while the item is temporarily immovable.
+                return (saved, false)
+            }
+            return (saved, saved != observed)
+        }
         guard isMovable else {
             if observed == .alwaysHidden {
-                return (saved ?? .hidden, false)
+                return (.hidden, false)
             }
             return (observed, false)
         }
         if observed == .alwaysHidden {
-            if let saved, saved != observed {
-                // The user's drags are recorded when they end, so an item
-                // that still has a different saved section was pushed here
-                // by the menu bar layout. Return it to its saved section.
-                return (saved, true)
-            }
-            if saved == nil {
-                // New items are added to the far left of the menu bar, which
-                // is where the always-hidden section is located.
-                return (.hidden, true)
-            }
-            return (observed, false)
+            // New items are inserted at the far left of the menu bar, which
+            // is where the always-hidden section is located. Default them to
+            // the hidden section.
+            return (.hidden, true)
         }
-        if saved == .alwaysHidden {
-            // The always-hidden divider may not be in the position that the
-            // user chose, which reclassifies the item. The user explicitly
-            // placed the item in the always-hidden section, so return it
-            // there until an explicit user action records it elsewhere.
-            return (.alwaysHidden, true)
-        }
-        if isFirstPass {
-            // The menu bar restored the arrangement that was in place when
-            // the app last quit, so follow it. This also brings the saved
-            // sections back in step after they were saved by an older
-            // version that did not follow the menu bar.
-            return (observed, false)
-        }
-        guard let saved, saved != observed else {
-            return (observed, false)
-        }
-        if isNewWindow {
-            // The item was created again, which can place it in a different
-            // section. Return it to its saved section.
-            return (saved, true)
-        }
-        // The item kept its window, so the change was made in the menu bar.
         return (observed, false)
     }
 }

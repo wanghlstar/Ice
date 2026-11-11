@@ -179,12 +179,6 @@ final class MenuBarItemManager: ObservableObject {
     /// The time at which the current rescue attempt started.
     private var rescueStartDate: Date?
 
-    /// The window identifiers of the menu bar items from the previous update.
-    ///
-    /// Items whose window identifier is new were created again by their app,
-    /// which can cause them to appear in a different section.
-    private var knownItemWindowIDs = Set<CGWindowID>()
-
     /// The number of consecutive cache passes in which an item has been
     /// observed in the always-hidden section at a stable position.
     private var misplacedPassCounts = [MenuBarItemInfo: Int]()
@@ -524,8 +518,6 @@ extension MenuBarItemManager {
             Logger.itemManager.debug("Menu bar items have not changed, but an item is awaiting rescue")
         }
 
-        let previousWindowIDs = knownItemWindowIDs
-
         var items = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
         let allItems = items
 
@@ -568,13 +560,11 @@ extension MenuBarItemManager {
         }
 
         let misplacedItems = reconcileSavedItemLayout(
-            previousWindowIDs: previousWindowIDs,
             newCache: itemCache,
             anchorX: (alwaysHiddenControlItem ?? hiddenControlItem).frame.minX
         )
 
         cachedItemSignature = signature
-        knownItemWindowIDs = Set(allItems.map(\.windowID))
 
         rescueMisplacedItems(
             misplacedItems,
@@ -623,20 +613,17 @@ extension MenuBarItemManager {
     /// Updates the saved layout to match the given cache, returning the items
     /// that are not in the section they belong to.
     ///
-    /// An item is only recorded as belonging to the always-hidden section if
-    /// the user was observed placing it there with a drag. Items that the
-    /// system created again in a different section are returned to the section
-    /// they belong to, and items that cannot currently be moved are never
-    /// recorded as always-hidden, so that a failed move does not make a
-    /// misplacement permanent.
+    /// Saved sections are authoritative. They are only changed by explicit
+    /// user actions. An observed section is used to create a location for an
+    /// item that has never been seen, but never to overwrite the section of an
+    /// item that already has one.
     ///
     /// - Parameters:
-    ///   - previousWindowIDs: The window identifiers from the previous update.
     ///   - newCache: The current cache.
+    ///   - anchorX: The leading edge of the managed menu bar area.
     ///
     /// - Returns: The items to return to their saved locations.
     private func reconcileSavedItemLayout(
-        previousWindowIDs: Set<CGWindowID>,
         newCache: ItemCache,
         anchorX: CGFloat
     ) -> [MenuBarItem] {
@@ -650,9 +637,6 @@ extension MenuBarItemManager {
         var misplacedItems = [MenuBarItem]()
         var savedInfos = Set<MenuBarItemInfo>()
         var pinnedInfoForSave = savedItemLayout.pinnedInfo
-        // The window identifiers are only known after a cache pass, so the
-        // first pass after launch sees every item as newly created.
-        let isFirstPass = previousWindowIDs.isEmpty
 
         // The item that currently occupies the leading edge of the visible
         // section. Temporarily shown items are excluded, as they are cached
@@ -705,17 +689,11 @@ extension MenuBarItemManager {
                 }
                 var sectionForLocation = section
 
-                // An item that the system created again can appear in a
-                // different section than the one it belongs to.
-                let isNewWindow = !previousWindowIDs.contains(item.windowID)
-
                 var isMisplaced = false
 
                 let resolution = MenuBarItemLayout.resolveLocation(
                     saved: savedSection,
                     observed: section,
-                    isNewWindow: isNewWindow,
-                    isFirstPass: isFirstPass,
                     isMovable: item.isMovable
                 )
                 sectionForLocation = resolution.section
@@ -796,6 +774,20 @@ extension MenuBarItemManager {
         }
 
         if locations != savedItemLayout.locations || pinnedInfoForSave != savedItemLayout.pinnedInfo {
+            let oldSections = savedItemLayout.locations.reduce(into: [MenuBarItemInfo: MenuBarSection.Name]()) { result, location in
+                result[location.info] = location.section
+            }
+            for location in locations {
+                guard
+                    let oldSection = oldSections[location.info],
+                    oldSection != location.section
+                else {
+                    continue
+                }
+                Logger.itemManager.notice(
+                    "Saved section for \(location.info.description) changed from \(oldSection.rawValue) to \(location.section.rawValue)"
+                )
+            }
             savedItemLayout = MenuBarItemLayout(
                 locations: locations,
                 pinnedInfo: pinnedInfoForSave
@@ -1198,6 +1190,16 @@ extension MenuBarItemManager {
             !appState.menuBarManager.isMenuBarHiddenBySystem,
             !appState.isActiveSpaceFullscreen
         else {
+            return false
+        }
+        // While the always-hidden section is shown, its divider is in a
+        // different position and items near it can be observed in a different
+        // section. Don't move anything until the section is hidden again.
+        if
+            let alwaysHiddenSection = appState.menuBarManager.section(withName: .alwaysHidden),
+            alwaysHiddenSection.isEnabled,
+            !alwaysHiddenSection.isHidden
+        {
             return false
         }
         guard
