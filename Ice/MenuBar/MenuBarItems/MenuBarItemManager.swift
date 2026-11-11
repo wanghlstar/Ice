@@ -650,21 +650,16 @@ extension MenuBarItemManager {
                 // single item does not end up with multiple locations.
                 let previouslySavedInfo = savedItemLayout.location(for: item.info)?.info
 
-                // Without a namespace, the item can't be identified reliably,
-                // so leave its saved location alone until the namespace can be
-                // resolved again. This happens while an app is restarting.
-                //
-                // A brand-new item may not have a resolved namespace yet. It
-                // can still be moved out of the always-hidden section, where
-                // the system places new items, so treat it as a new item
-                // instead of leaving it there until the namespace resolves.
-                // Its location is recorded provisionally and is updated once
-                // the namespace resolves.
-                let isProvisionalNewItem = section == .alwaysHidden && item.isMovable
+                // Without a namespace, the item can't be identified reliably.
+                // Many apps use the same item title (for example, "Item-0"),
+                // so a title-only match is ambiguous. Leave the saved location
+                // alone until the namespace resolves. Recording a provisional
+                // location here can overwrite the saved sections of other
+                // items that share the title, which is how items previously
+                // escaped the always-hidden section.
                 guard
                     item.info.namespace.optional != nil ||
-                    previouslySavedInfo != nil ||
-                    isProvisionalNewItem
+                    previouslySavedInfo != nil
                 else {
                     continue
                 }
